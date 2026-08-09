@@ -41,6 +41,8 @@ import {
   Globe,
   Wifi,
   WifiOff,
+  Heart,
+  Timer,
 } from "lucide-react";
 
 // ─── Types ───
@@ -102,6 +104,20 @@ interface ProxyStatus {
   isRefreshing: boolean;
 }
 
+interface KeepAliveStatus {
+  isRunning: boolean;
+  baseUrl: string;
+  startedAt: string | null;
+  lastPingAt: string | null;
+  lastPingStatus: 'success' | 'failure' | null;
+  totalPings: number;
+  successfulPings: number;
+  failedPings: number;
+  successRate: string;
+  consecutiveFailures: number;
+  uptime: string;
+}
+
 // ─── Helpers ───
 
 function cloneIcon(icon: React.ReactNode, className: string): React.ReactNode {
@@ -153,6 +169,7 @@ export default function DashboardPage() {
   const [schedulerRunning, setSchedulerRunning] = useState(false);
   const [workerSlots, setWorkerSlots] = useState<WorkerSlot[]>([]);
   const [proxyStatus, setProxyStatus] = useState<ProxyStatus | null>(null);
+  const [keepAliveStatus, setKeepAliveStatus] = useState<KeepAliveStatus | null>(null);
   const [loading, setLoading] = useState(false);
   const [triggerLoading, setTriggerLoading] = useState(false);
   const [aiSuggestion, setAiSuggestion] = useState<string | null>(null);
@@ -218,18 +235,26 @@ export default function DashboardPage() {
     } catch {}
   }, []);
 
+  const fetchKeepAlive = useCallback(async () => {
+    try {
+      const res = await fetch("/api/keepalive");
+      const data = await res.json();
+      setKeepAliveStatus(data.keepAlive || data);
+    } catch {}
+  }, []);
+
   const fetchAll = useCallback(async () => {
     setLoading(true);
-    await Promise.all([fetchConfig(), fetchStats(), fetchSignups(), fetchLogs(), fetchScheduler(), fetchProxy()]);
+    await Promise.all([fetchConfig(), fetchStats(), fetchSignups(), fetchLogs(), fetchScheduler(), fetchProxy(), fetchKeepAlive()]);
     setLoading(false);
-  }, [fetchConfig, fetchStats, fetchSignups, fetchLogs, fetchScheduler, fetchProxy]);
+  }, [fetchConfig, fetchStats, fetchSignups, fetchLogs, fetchScheduler, fetchProxy, fetchKeepAlive]);
 
   useEffect(() => {
     let mounted = true;
     const load = async () => {
       if (!mounted) return;
       setLoading(true);
-      await Promise.all([fetchConfig(), fetchStats(), fetchSignups(), fetchLogs(), fetchScheduler(), fetchProxy()]);
+      await Promise.all([fetchConfig(), fetchStats(), fetchSignups(), fetchLogs(), fetchScheduler(), fetchProxy(), fetchKeepAlive()]);
       if (mounted) setLoading(false);
     };
     load();
@@ -406,6 +431,10 @@ export default function DashboardPage() {
           <div className="flex items-center gap-2 text-xs text-zinc-500">
             <Brain className="w-3 h-3" />
             <span>AI: Groq + Puppeteer</span>
+          </div>
+          <div className="flex items-center gap-2 text-xs text-zinc-500">
+            <Heart className={`w-3 h-3 ${keepAliveStatus?.isRunning ? 'text-rose-400' : ''}`} />
+            <span>{keepAliveStatus?.isRunning ? 'Keep-alive ON' : 'Keep-alive: ?'}</span>
           </div>
         </div>
       </aside>
@@ -603,6 +632,66 @@ export default function DashboardPage() {
                   ) : (
                     <p className="text-[10px] text-zinc-500 mt-2">Each signup rotates to a different proxy IP for diversity</p>
                   )}
+                </CardContent>
+              </Card>
+
+              {/* Keep-Alive Status Card */}
+              <Card className="bg-zinc-900 border-zinc-800">
+                <CardHeader className="pb-3">
+                  <div className="flex items-center justify-between">
+                    <CardTitle className="text-sm font-medium flex items-center gap-2">
+                      <Heart className={`w-4 h-4 ${keepAliveStatus?.isRunning ? 'text-rose-400 animate-pulse' : 'text-zinc-500'}`} />
+                      24/7 Keep-Alive
+                    </CardTitle>
+                    <div className="flex items-center gap-2">
+                      {keepAliveStatus?.isRunning && (
+                        <Badge variant="outline" className="text-[10px] border-emerald-800 text-emerald-400">
+                          {keepAliveStatus.uptime}
+                        </Badge>
+                      )}
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={async () => {
+                          try {
+                            await fetch("/api/keepalive", {
+                              method: "POST",
+                              headers: { "Content-Type": "application/json" },
+                              body: JSON.stringify({ action: keepAliveStatus?.isRunning ? "stop" : "start" }),
+                            });
+                            fetchKeepAlive();
+                            toast({ title: keepAliveStatus?.isRunning ? "Keep-Alive Stopped" : "Keep-Alive Started" });
+                          } catch (error) {
+                            toast({ title: "Error", description: (error as Error).message, variant: "destructive" });
+                          }
+                        }}
+                        className="text-violet-400 hover:text-violet-300 h-7 w-7 p-0"
+                      >
+                        {keepAliveStatus?.isRunning ? <Square className="w-3.5 h-3.5" /> : <Play className="w-3.5 h-3.5" />}
+                      </Button>
+                    </div>
+                  </div>
+                </CardHeader>
+                <CardContent>
+                  <div className="flex items-center gap-4 text-xs">
+                    <div className="flex items-center gap-1.5">
+                      <div className={`w-1.5 h-1.5 rounded-full ${keepAliveStatus?.isRunning ? 'bg-emerald-500 animate-pulse' : 'bg-zinc-600'}`} />
+                      <span className="text-zinc-400">{keepAliveStatus?.isRunning ? 'Self-ping active' : 'Inactive'}</span>
+                    </div>
+                    {keepAliveStatus?.isRunning && (
+                      <>
+                        <div className="text-zinc-600">Pings: <span className="text-zinc-400">{keepAliveStatus.totalPings}</span></div>
+                        <div className="text-zinc-600">Rate: <span className="text-emerald-400">{keepAliveStatus.successRate}</span></div>
+                        <div className="text-zinc-600">Last: <span className="text-zinc-400">{keepAliveStatus.lastPingAt ? timeAgo(keepAliveStatus.lastPingAt) : '...'}</span></div>
+                      </>
+                    )}
+                  </div>
+                  <p className="text-[10px] text-zinc-500 mt-2">
+                    {keepAliveStatus?.isRunning
+                      ? `Pinging ${keepAliveStatus.baseUrl}/api/health every 4 min — prevents Render sleep`
+                      : 'Start keep-alive to ping this server every 4 min and prevent Render from sleeping'
+                    }
+                  </p>
                 </CardContent>
               </Card>
 
