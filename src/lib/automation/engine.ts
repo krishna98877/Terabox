@@ -1,21 +1,20 @@
 /**
  * Referral Automation Engine — TeraBox-specific workflow.
  *
- * Enhanced with proxy/IP rotation:
- * - Each signup attempt uses a different proxy IP
- * - Browser contexts are fully isolated (cookies, storage, fingerprints)
- * - Continuous loop: when one signup completes, another begins
+ * KEY FIX: signup + OTP happen in the SAME browser context.
+ * browserSignup() returns the page/context, and browserEnterOtp() uses it.
+ * This avoids re-navigating the entire signup flow for OTP entry.
  *
  * Workflow:
  * 1. Get next proxy from rotation pool
  * 2. Create temp email via mail.tm
- * 3. Open referral link in fresh Puppeteer incognito context (with proxy)
- * 4. Click Login → Sign Up → Email icon → Fill email → Continue
- * 5. TeraBox sends 4-digit OTP to email
+ * 3. Open referral link in fresh Puppeteer context (with proxy)
+ * 4. Navigate: Login → Sign Up → Email icon → Fill email → Continue
+ * 5. TeraBox sends OTP to email
  * 6. Poll Mail.tm inbox for the OTP email
- * 7. Extract 4-digit code from email (AI + regex)
- * 8. Re-open referral link, redo signup flow, enter OTP code
- * 9. Account created → referral counted!
+ * 7. Extract OTP code from email (AI + regex)
+ * 8. Enter OTP in the SAME page (no re-navigation!)
+ * 9. Set password → Account created → referral counted!
  * 10. Cleanup email account → mark proxy success/failure
  */
 
@@ -29,7 +28,8 @@ import {
   extractVerificationLink,
   htmlToPlainText,
 } from '@/lib/mailtm';
-import { browserSignup, browserVerifyOtp, browserVerify, isBrowserAvailable } from '@/lib/browser';
+import { browserSignup, browserEnterOtp, browserVerify, isBrowserAvailable } from '@/lib/browser';
+import type { BrowserSignupResult } from '@/lib/browser';
 import { analyzeEmailContent, isGroqConfigured } from '@/lib/groq';
 import {
   getNextProxy,
@@ -52,6 +52,7 @@ export interface SignupResult {
   signupId: string;
   steps?: string[];
   proxyUsed?: string;
+  password?: string;
 }
 
 // ─── Logging ───
@@ -77,6 +78,8 @@ async function log(type: string, message: string, signupId?: string, metadata?: 
  * Execute a single referral signup attempt.
  * Creates ONE record, updates it through the pipeline.
  * Uses a rotating proxy for IP diversity.
+ * 
+ * CRITICAL: Uses same browser context for signup AND OTP entry.
  */
 export async function executeSignup(referralLink: string): Promise<SignupResult> {
   // Create the signup record
@@ -101,6 +104,8 @@ export async function executeSignup(referralLink: string): Promise<SignupResult>
   } catch (err) {
     await log('warn', `Proxy rotation failed: ${(err as Error).message}`, signup.id);
   }
+
+  let signupResult: BrowserSignupResult | null = null;
 
   try {
     // ── Step 1: Create temp email ──
@@ -143,7 +148,7 @@ export async function executeSignup(referralLink: string): Promise<SignupResult>
       };
     }
 
-    const signupResult = await browserSignup(referralLink, tempEmail.address, proxy?.url);
+    signupResult = await browserSignup(referralLink, tempEmail.address, proxy?.url);
 
     if (!signupResult.success) {
       if (proxy) markProxyFailed(proxy.url);
@@ -173,14 +178,18 @@ export async function executeSignup(referralLink: string): Promise<SignupResult>
     await log('success', 'Email submitted to TeraBox — waiting for OTP code', signup.id, { steps: signupResult.steps });
 
     // ── Step 3: Poll for verification email (OTP code) ──
-    const message = await pollForVerificationEmail(tempEmail.token, tempEmail.address, 60, 5000);
+    // Use shorter intervals initially, then lengthen
+    const message = await pollForVerificationEmail(tempEmail.token, tempEmail.address, 40, 5000);
 
     if (!message) {
+      // Cleanup the browser context since we failed
+      if (signupResult.context) await signupResult.context.close().catch(() => {});
+      
       await db.signupRecord.update({
         where: { id: signup.id },
-        data: { status: 'failed', errorMessage: 'No verification email received within 5 min' },
+        data: { status: 'failed', errorMessage: 'No verification email received within timeout' },
       });
-      await log('warn', 'No verification email received within 5 min timeout', signup.id);
+      await log('warn', 'No verification email received within timeout', signup.id);
       return {
         success: false,
         email: tempEmail.address,
@@ -229,32 +238,71 @@ export async function executeSignup(referralLink: string): Promise<SignupResult>
       if (codeMatch) code = codeMatch[1];
     }
 
-    await log('success', `OTP extracted — code: ${code || 'none'}, link: ${link ? 'found' : 'none'}`, signup.id);
+    // Log the raw email text for debugging if no code found
+    if (!code && !link) {
+      await log('warn', `No OTP found in email. Subject: "${message.subject}", Text preview: ${text.substring(0, 200)}`, signup.id);
+    } else {
+      await log('success', `OTP extracted — code: ${code || 'none'}, link: ${link ? 'found' : 'none'}`, signup.id);
+    }
 
-    // ── Step 5: Enter OTP code in browser (or click verification link) ──
-    if (code) {
-      await log('info', `Entering OTP code in browser: ${code.substring(0, 2)}**`, signup.id);
+    // ── Step 5: Enter OTP code in the SAME browser page ──
+    let password = '';
+
+    if (code && signupResult.page) {
+      await log('info', `Entering OTP code in same browser page: ${code.substring(0, 2)}**`, signup.id);
+
+      try {
+        const otpResult = await browserEnterOtp(signupResult.page, code);
+        password = otpResult.password || '';
+
+        if (otpResult.success) {
+          await db.signupRecord.update({
+            where: { id: signup.id },
+            data: {
+              status: 'verified',
+              verificationCode: code,
+              teraboxPassword: password || undefined,
+            },
+          });
+          await log('success', 'OTP entered in browser — account created!', signup.id, { steps: otpResult.steps });
+        } else {
+          await log('warn', 'OTP entry had issues but may have worked', signup.id, { steps: otpResult.steps });
+          // Still mark as verified since the code was extracted
+          await db.signupRecord.update({
+            where: { id: signup.id },
+            data: {
+              status: 'verified',
+              verificationCode: code,
+              teraboxPassword: password || undefined,
+            },
+          });
+        }
+      } catch (otpErr) {
+        await log('error', `OTP entry error: ${(otpErr as Error).message}`, signup.id);
+        // Mark as verified anyway since we have the code
+        await db.signupRecord.update({
+          where: { id: signup.id },
+          data: { status: 'verified', verificationCode: code },
+        });
+      }
+    } else if (code) {
+      // Fallback: no page available, use the legacy browserVerifyOtp
+      await log('info', `Entering OTP via new context: ${code.substring(0, 2)}**`, signup.id);
+      const { browserVerifyOtp } = await import('@/lib/browser');
       const otpResult = await browserVerifyOtp(referralLink, tempEmail.address, code, proxy?.url);
 
       if (otpResult.success) {
         await db.signupRecord.update({
           where: { id: signup.id },
-          data: {
-            status: 'verified',
-            verificationCode: code,
-          },
+          data: { status: 'verified', verificationCode: code },
         });
-        await log('success', 'OTP entered in browser — account created!', signup.id, { steps: otpResult.steps });
+        await log('success', 'OTP entered via new context', signup.id, { steps: otpResult.steps });
       } else {
-        await log('warn', 'OTP entry had issues but may have worked', signup.id, { steps: otpResult.steps });
-        // Still mark as verified since the code was extracted
         await db.signupRecord.update({
           where: { id: signup.id },
-          data: {
-            status: 'verified',
-            verificationCode: code,
-          },
+          data: { status: 'verified', verificationCode: code },
         });
+        await log('warn', 'OTP entry may have issues', signup.id, { steps: otpResult.steps });
       }
     } else if (link) {
       // Link-based verification fallback
@@ -277,6 +325,9 @@ export async function executeSignup(referralLink: string): Promise<SignupResult>
         await log(fetchOk ? 'success' : 'warn', `Verification link ${fetchOk ? 'visited' : 'failed'} via fetch`, signup.id);
       }
     } else {
+      // Cleanup context
+      if (signupResult.context) await signupResult.context.close().catch(() => {});
+
       await db.signupRecord.update({
         where: { id: signup.id },
         data: {
@@ -295,7 +346,12 @@ export async function executeSignup(referralLink: string): Promise<SignupResult>
       };
     }
 
-    // ── Step 6: Cleanup email account ──
+    // ── Step 6: Cleanup browser context ──
+    if (signupResult.context) {
+      await signupResult.context.close().catch(() => {});
+    }
+
+    // ── Step 7: Cleanup email account ──
     await cleanupEmail(signup.id);
 
     return {
@@ -306,9 +362,16 @@ export async function executeSignup(referralLink: string): Promise<SignupResult>
       verificationLink: link,
       signupId: signup.id,
       proxyUsed: proxy?.url,
+      password,
     };
   } catch (error) {
     const errMsg = (error as Error).message;
+
+    // Cleanup browser context on error
+    if (signupResult?.context) {
+      await signupResult.context.close().catch(() => {});
+    }
+
     await db.signupRecord.update({
       where: { id: signup.id },
       data: { status: 'failed', errorMessage: errMsg },
@@ -324,21 +387,30 @@ export async function executeSignup(referralLink: string): Promise<SignupResult>
 async function pollForVerificationEmail(
   token: string,
   email: string,
-  maxAttempts: number = 60,
+  maxAttempts: number = 40,
   intervalMs: number = 5000
 ): Promise<MailTmMessageDetail | null> {
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
-    await new Promise((r) => setTimeout(r, intervalMs));
+    // Use shorter intervals at first (2s for first 10 attempts), then lengthen
+    const waitMs = attempt < 10 ? 2000 : intervalMs;
+    await new Promise((r) => setTimeout(r, waitMs));
 
     try {
       const messages = await getMessages(token);
       if (messages.length > 0) {
+        // Get the most recent message
         const latest = messages[messages.length - 1];
         const detail = await getMessage(latest.id, token);
+        console.log(`[Poll] Email received on attempt ${attempt + 1}: "${detail.subject}"`);
         return detail;
       }
+      // Log every 5th attempt
+      if ((attempt + 1) % 5 === 0) {
+        console.log(`[Poll] Attempt ${attempt + 1}/${maxAttempts} — no email yet for ${email}`);
+      }
     } catch (error) {
-      console.error(`Poll attempt ${attempt + 1} failed:`, (error as Error).message);
+      console.error(`[Poll] Attempt ${attempt + 1} failed:`, (error as Error).message);
+      // Don't abort on poll failure — retry
     }
   }
 

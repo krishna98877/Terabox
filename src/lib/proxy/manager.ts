@@ -3,12 +3,14 @@
  *
  * Strategy:
  * - Fetch proxies from multiple free APIs on startup
- * - Validate each proxy by testing HTTP connectivity
+ * - Validate each proxy by testing HTTP connectivity (using https-proxy-agent)
  * - Maintain a pool of working proxies
  * - Rotate through the pool (round-robin) for each signup
  * - Auto-refresh when pool is depleted or proxies go stale
  * - If no proxies available, fall back to direct connection
  */
+
+import { HttpsProxyAgent } from 'https-proxy-agent';
 
 // ─── Types ───
 
@@ -80,17 +82,18 @@ function parseProxy(line: string): ProxyInfo | null {
   }
 }
 
-// ─── Validate a single proxy ───
+// ─── Validate a single proxy using https-proxy-agent ───
 
-async function validateProxy(proxy: ProxyInfo, timeoutMs = 5000): Promise<boolean> {
+async function validateProxy(proxy: ProxyInfo, timeoutMs = 8000): Promise<boolean> {
   try {
+    const agent = new HttpsProxyAgent(proxy.url);
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
 
     const res = await fetch('https://httpbin.org/ip', {
       signal: controller.signal,
-      // @ts-expect-error - proxy not in standard fetch types
-      proxy: proxy.url,
+      // @ts-expect-error - agent is supported by Node.js undici fetch
+      dispatcher: agent,
       cache: 'no-store',
     });
 
@@ -99,13 +102,35 @@ async function validateProxy(proxy: ProxyInfo, timeoutMs = 5000): Promise<boolea
     if (res.ok) {
       const data = await res.json();
       // If we get a different IP than our own, the proxy works
-      if (data?.origin && data.origin !== proxy.host) {
+      if (data?.origin) {
         proxy.lastVerified = Date.now();
         return true;
       }
     }
     return false;
   } catch {
+    // Fallback: try a simpler validation using direct TCP connection
+    try {
+      const agent = new HttpsProxyAgent(proxy.url);
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 5000);
+
+      const res = await fetch('https://www.google.com/', {
+        method: 'HEAD',
+        signal: controller.signal,
+        // @ts-expect-error - agent is supported by Node.js undici fetch
+        dispatcher: agent,
+        cache: 'no-store',
+        redirect: 'manual',
+      });
+
+      clearTimeout(timer);
+      // Any response (even redirect) means the proxy connected
+      if (res.status >= 200 && res.status < 500) {
+        proxy.lastVerified = Date.now();
+        return true;
+      }
+    } catch {}
     return false;
   }
 }
@@ -190,9 +215,9 @@ export async function refreshProxyPool(): Promise<{ fetched: number; validated: 
     const rawProxies = await fetchFromSources();
     console.log(`[Proxy] Fetched ${rawProxies.length} raw proxies from ${PROXY_SOURCES.length} sources`);
 
-    // Validate a sample (first 50 to keep it fast)
-    const toValidate = rawProxies.slice(0, 50);
-    const validProxies = await validateBatch(toValidate, 10);
+    // Validate a sample (first 80 to improve chances)
+    const toValidate = rawProxies.slice(0, 80);
+    const validProxies = await validateBatch(toValidate, 15);
     console.log(`[Proxy] Validated ${validProxies.length} working proxies`);
 
     // Merge with existing pool (keep working proxies, add new ones)
