@@ -1,0 +1,53 @@
+generator client {
+  provider      = "prisma-client-js"
+  binaryTargets = ["native", "linux-musl-openssl-3.0.x", "debian-openssl-3.0.x"]
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model ReferralConfig {
+  id               String   @id @default(cuid())
+  masterLink       String
+  isActive         Boolean  @default(true)
+  autoSignup       Boolean  @default(false)
+  signupInterval   Int      @default(30)
+  maxSignupsPerDay Int      @default(50)
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+}
+
+model SignupRecord {
+  id               String   @id @default(cuid())
+  email            String
+  emailPassword    String
+  mailTmToken      String?
+  referralLink     String
+  status           String   @default("pending")
+  verificationCode String?
+  verificationLink String?
+  errorMessage     String?
+  retryCount       Int      @default(0)
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+  mailTmAccountId  String?
+  teraboxPassword  String?
+}
+
+model ActivityLog {
+  id        String   @id @default(cuid())
+  type      String
+  message   String
+  signupId  String?
+  metadata  String?
+  createdAt DateTime @default(now())
+}
+
+model MailDomain {
+  id        String   @id @default(cuid())
+  domain    String   @unique
+  isActive  Boolean  @default(true)
+  fetchedAt DateTime @default(now())
+}

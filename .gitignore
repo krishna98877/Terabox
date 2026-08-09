@@ -1,0 +1,75 @@
+# dependencies
+node_modules
+/.pnp
+.pnp.*
+
+# testing
+/coverage
+
+# next.js
+/.next/
+/out/
+
+# production
+/build
+
+# database
+/db/
+
+# misc
+.DS_Store
+*.pem
+
+# debug
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# env files
+.env
+.env.local
+
+# vercel
+.vercel
+
+# typescript
+*.tsbuildinfo
+next-env.d.ts
+
+# logs
+*.log
+server.log
+dev.log
+
+# IDE
+.claude
+.z-ai-config
+
+# Skills directory
+/skills/
+
+# Tool results
+/tool-results/
+
+# Upload directory
+/upload/
+
+# Large binaries
+*.mp4
+*.mov
+*.avi
+*.node
+
+# Mini services
+/mini-services/
+
+# Examples
+/examples/
+
+# Download
+/download/
+
+# Temp JSON files
+/temp-mail-*.json
+/mailtm-*.json
+/components.json
