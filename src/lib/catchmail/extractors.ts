@@ -34,6 +34,12 @@ export function extractVerificationCode(text: string): string | null {
 
     // TeraBox pattern: code appears alone on a line
     /(?:^|\n)\s*(\d{6})\s*(?:\n|$)/m,
+
+    // Alphanumeric codes (e.g., SVC-Q7C, ABC-123)
+    /(?:verification|verify|code|confirm)[^\w]*([A-Z0-9]{2,4}-?[A-Z0-9]{2,4})/i,
+
+    // Code on its own line (alphanumeric)
+    /(?:^|\n)\s*([A-Z0-9]{3,4}-[A-Z0-9]{2,4})\s*(?:\n|$)/mi,
   ];
 
   for (const pattern of patterns) {
