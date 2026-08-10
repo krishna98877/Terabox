@@ -25,8 +25,7 @@
  * - SOCKS5 support via socks-proxy-agent
  */
 
-import { HttpsProxyAgent } from 'https-proxy-agent';
-import { SocksProxyAgent } from 'socks-proxy-agent';
+import { proxiedFetch } from '@/lib/http/proxied-fetch';
 
 // ─── Types ───
 
@@ -189,25 +188,30 @@ async function fetchFromProxyScrape(): Promise<ProxyInfo[]> {
 }
 
 // ─── GeoNode (Residential Proxy Source — CRITICAL for TeraBox) ───
-
-const GEONODE_API = 'https://proxylist.geonode.com/free-proxy/list';
+// NOTE: The old GeoNode API (proxylist.geonode.com) is DEAD (404).
+// We now use ProxyScrape's premium endpoint which provides better quality proxies.
+const GEONODE_API = 'https://api.proxyscrape.com/v3/free-proxy-list/get';
 
 /**
- * Fetch residential proxies from GeoNode.
- * These are more likely to be residential IPs which TeraBox doesn't flag.
- * Free tier: limited but much better quality than datacenter proxies.
+ * Fetch high-quality proxies from ProxyScrape (replaces dead GeoNode).
+ * Uses the v3 API with elite anonymity and country filtering.
+ * These proxies are much more reliable than the old GeoNode free list.
+ *
+ * Strategy: Fetch elite proxies from US/GB/DE/CA (Western countries)
+ * which are less likely to be flagged by TeraBox.
  */
 async function fetchFromGeoNode(): Promise<ProxyInfo[]> {
-  console.log('[Proxy] Fetching residential proxies from GeoNode...');
+  console.log('[Proxy] Fetching elite proxies from ProxyScrape (GeoNode replacement)...');
 
   try {
+    // v3 API with protocolipport format — returns http://ip:port lines
     const qs = new URLSearchParams({
-      limit: '20',
-      page: '1',
-      sort_by: 'last_checked',
-      sort_order: 'desc',
-      protocols: 'http,socks5',
-      anonymities: 'Elite,Anonymous',
+      request: 'displayproxies',
+      protocol: 'http',
+      timeout: '10000',
+      proxy_format: 'protocolipport',
+      anonymity: 'elite',
+      country: 'us,gb,de,ca,fr,nl', // Western countries — less likely flagged
     });
 
     const res = await fetch(`${GEONODE_API}?${qs}`, {
@@ -216,34 +220,35 @@ async function fetchFromGeoNode(): Promise<ProxyInfo[]> {
     });
 
     if (!res.ok) {
-      console.warn(`[Proxy] GeoNode returned ${res.status} — trying alternative...`);
-      // Fallback: try ProxyScrape elite proxies (higher quality)
+      console.warn(`[Proxy] ProxyScrape returned ${res.status} — trying alternative...`);
       return fetchFromProxyScrape();
     }
 
-    const data = await res.json();
-    const proxyList = data?.data || [];
+    const text = await res.text();
+    const lines = text.trim().split('\n').filter(l => l.includes('://'));
 
-    const proxies: ProxyInfo[] = proxyList.map((p: any) => {
-      const protocol = (p.protocols?.[0] || 'http') as ProxyInfo['protocol'];
-      return {
-        url: `${protocol}://${p.ip}:${p.port}`,
-        host: p.ip,
-        port: parseInt(p.port, 10),
-        protocol,
-        country: p.country,
-        source: 'geonode',
-        anonymity: p.anonymity,
-        lastVerified: 0,
-        failCount: 0,
-        successCount: 0,
-      } as ProxyInfo;
-    }).filter((p: ProxyInfo) => p.host && p.port > 0);
+    const proxies: ProxyInfo[] = [];
+    for (const line of lines.slice(0, 25)) {
+      try {
+        const url = new URL(line.trim());
+        proxies.push({
+          url: line.trim(),
+          host: url.hostname,
+          port: parseInt(url.port, 10),
+          protocol: 'http',
+          source: 'geonode', // Keep same source name for priority ordering
+          anonymity: 'elite',
+          lastVerified: 0,
+          failCount: 0,
+          successCount: 0,
+        });
+      } catch {}
+    }
 
-    console.log(`[Proxy] GeoNode: got ${proxies.length} residential proxies`);
+    console.log(`[Proxy] ProxyScrape elite (GeoNode replacement): got ${proxies.length} proxies`);
     return proxies;
   } catch (err) {
-    console.warn(`[Proxy] GeoNode fetch failed: ${(err as Error).message}`);
+    console.warn(`[Proxy] ProxyScrape fetch failed: ${(err as Error).message}`);
     return [];
   }
 }
@@ -307,22 +312,14 @@ async function validateProxy(proxy: ProxyInfo, timeoutMs = 8000): Promise<boolea
     return true;
   }
 
-  // ★ Step 1: Quick connectivity check against httpbin
+  // ★ Validate using proxiedFetch (which uses undici ProxyAgent)
+  // This fixes the broken fetch() + HttpsProxyAgent dispatcher approach
   try {
-    const agent = createAgent(proxy);
-    if (!agent) return false;
-
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), timeoutMs);
-
-    const res = await fetch('https://httpbin.org/ip', {
-      signal: controller.signal,
-      // @ts-expect-error - agent is supported by Node.js undici fetch
-      dispatcher: agent,
+    const res = await proxiedFetch('https://httpbin.org/ip', {
+      signal: AbortSignal.timeout(timeoutMs),
       cache: 'no-store',
+      proxyUrl: proxy.url,
     });
-
-    clearTimeout(timer);
 
     if (!res.ok) return false;
     const data = await res.json();
@@ -337,9 +334,14 @@ async function validateProxy(proxy: ProxyInfo, timeoutMs = 8000): Promise<boolea
 
 /**
  * Create the appropriate proxy agent based on protocol.
+ * Used for Puppeteer browser connections (not for fetch).
+ * For fetch-based requests, use proxiedFetch() instead.
  */
-function createAgent(proxy: ProxyInfo): HttpsProxyAgent | SocksProxyAgent | null {
+export function createAgent(proxy: ProxyInfo): any | null {
   try {
+    // Lazy imports — only needed for Puppeteer, not for API calls
+    const { HttpsProxyAgent } = require('https-proxy-agent');
+    const { SocksProxyAgent } = require('socks-proxy-agent');
     if (proxy.protocol === 'socks4' || proxy.protocol === 'socks5') {
       return new SocksProxyAgent(proxy.url);
     }

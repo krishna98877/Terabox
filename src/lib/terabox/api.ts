@@ -24,7 +24,7 @@
  *   Without cookies, every request looks like a fresh suspicious hit → captcha!
  */
 
-import { HttpsProxyAgent } from 'https-proxy-agent';
+import { proxiedFetch } from '@/lib/http/proxied-fetch';
 
 // TeraBox has multiple domains — try them in order if one fails
 const BASE_URLS = [
@@ -174,26 +174,15 @@ async function passportPost(
     ).toString();
 
     try {
-      const fetchOptions: RequestInit & { dispatcher?: unknown } = {
+      const res = await proxiedFetch(url, {
         method: 'POST',
         headers,
         body,
         redirect: 'follow',
         signal: AbortSignal.timeout(15000),
         cache: 'no-store',
-      };
-
-      // ★ Apply proxy agent if available (rotating proxy from pool)
-      if (_proxyUrl) {
-        try {
-          const agent = new HttpsProxyAgent(_proxyUrl);
-          fetchOptions.dispatcher = agent;
-        } catch (proxyErr) {
-          console.warn(`[TeraBox API] Proxy agent creation failed: ${(proxyErr as Error).message} — using direct`);
-        }
-      }
-
-      const res = await fetch(url, fetchOptions);
+        proxyUrl: _proxyUrl || undefined,
+      });
 
       // ★ Store any Set-Cookie headers for session continuity
       const setCookies = (res as any).headers?.getSetCookie?.() || [];
@@ -491,21 +480,13 @@ export async function getShareInfo(shorturl: string): Promise<{
       const cookieStr = getCookieString();
       if (cookieStr) headers['Cookie'] = cookieStr;
 
-      const fetchOptions: RequestInit & { dispatcher?: unknown } = {
+      const res = await proxiedFetch(`${baseUrl}/api/shorturlinfo?${qs}`, {
         headers,
         redirect: 'follow',
         signal: AbortSignal.timeout(15000),
         cache: 'no-store',
-      };
-
-      if (_proxyUrl) {
-        try {
-          const agent = new HttpsProxyAgent(_proxyUrl);
-          fetchOptions.dispatcher = agent;
-        } catch {}
-      }
-
-      const res = await fetch(`${baseUrl}/api/shorturlinfo?${qs}`, fetchOptions);
+        proxyUrl: _proxyUrl || undefined,
+      });
 
       // Store cookies
       const setCookies = (res as any).headers?.getSetCookie?.() || [];
@@ -738,22 +719,13 @@ export async function visitShareLink(
     const cookieStr = getCookieString();
     if (cookieStr) headers['Cookie'] = cookieStr;
 
-    const fetchOptions: RequestInit & { dispatcher?: unknown } = {
+    const res = await proxiedFetch(referralLink, {
       headers,
       redirect: 'follow',
       signal: AbortSignal.timeout(15000),
       cache: 'no-store',
-    };
-
-    // Apply proxy
-    if (_proxyUrl) {
-      try {
-        const agent = new HttpsProxyAgent(_proxyUrl);
-        fetchOptions.dispatcher = agent;
-      } catch {}
-    }
-
-    const res = await fetch(referralLink, fetchOptions);
+      proxyUrl: _proxyUrl || undefined,
+    });
 
     // ★ Store ALL cookies from this response — this is how referral tracking works!
     const setCookies = (res as any).headers?.getSetCookie?.() || [];

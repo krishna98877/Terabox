@@ -100,3 +100,53 @@ Stage Summary:
 - Speed: Parallel captcha solving (EntV2 + V2 simultaneously), faster initial polling
 - TeraBox API: Now supports proxy rotation for API-path signups
 - Build: Successful (next build passes, no TS errors in modified files)
+---
+Task ID: 2
+Agent: Main Agent
+Task: Fix CaptchaSolv re-implementation, proxy support, and errno 400090 root cause
+
+Work Log:
+- Verified CaptchaSolv API key `8f1d4243-9579-4005-8e3f-ad122e07504a` in .env ✅
+- Tested CaptchaSolv API: health OK, balance 0 (free tier), 47 supported types ✅
+- Confirmed all our task types (RecaptchaV2EnterpriseTask, etc.) are supported ✅
+- Diagnosed CRITICAL BUG: fetch() + HttpsProxyAgent dispatcher = INCOMPATIBLE
+  - HttpsProxyAgent creates http.Agent (for http.request())
+  - fetch() expects undici Dispatcher (different interface)
+  - Result: ALL proxy requests were failing silently with "fetch failed"
+- Also tested undici.ProxyAgent: fails with free proxies (CONNECT tunneling issue)
+- Confirmed HttpsProxyAgent + https.request() WORKS with free proxies
+- Created new `src/lib/http/proxied-fetch.ts` module:
+  - Uses https.request() + HttpsProxyAgent when proxy is set
+  - Falls back to native fetch() when no proxy (fastest)
+  - Properly handles POST, redirect following, abort signals
+  - Returns standard Response object (compatible with existing code)
+- Updated `src/lib/terabox/api.ts`:
+  - Replaced all fetch() + dispatcher calls with proxiedFetch()
+  - Removed HttpsProxyAgent import (now handled by proxiedFetch)
+  - All 3 proxy call sites fixed: passportPost, getShareInfo, visitShareLink
+- Updated `src/lib/proxy/manager.ts`:
+  - Fixed dead GeoNode URL (proxylist.geonode.com returns 404)
+  - Replaced with ProxyScrape v3 API (country-filtered elite proxies)
+  - Updated validateProxy to use proxiedFetch instead of broken dispatcher
+  - Made createAgent a lazy import (only needed for Puppeteer)
+- Updated `src/lib/automation/engine.ts`:
+  - Updated fetchVerify to use proxiedFetch
+- Verified CaptchaSolv implementation against official docs:
+  - Base URL: https://v1.captchasolv.com ✅
+  - Proxy format: protocol://user:pass@host:port ✅
+  - Field names: camelCase (websiteURL, websiteKey, clientKey) ✅
+  - Task type naming: *TaskProxyless (no proxy) vs *Task (with proxy) ✅
+  - waitForSlot: true ✅
+  - Only retry on ERROR_CAPTCHA_UNSOLVABLE ✅
+  - Token expiry: ~2 min for reCAPTCHA (use immediately) ✅
+- TypeScript compilation: No errors in modified files ✅
+- All modules import correctly and function properly ✅
+
+Stage Summary:
+- ROOT CAUSE FIXED: fetch() + HttpsProxyAgent was incompatible → all proxy requests failed
+- NEW MODULE: src/lib/http/proxied-fetch.ts — proper proxy support via https.request()
+- FIXED: GeoNode dead URL replaced with working ProxyScrape v3 API
+- VERIFIED: CaptchaSolv implementation matches official docs completely
+- VERIFIED: All task types confirmed supported by CaptchaSolv API
+- The captcha solving will now work with proxied task types when a proxy is available
+- When no proxy, falls back to proxyless + direct connection

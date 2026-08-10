@@ -767,7 +767,8 @@ export async function executeSignup(referralLink: string): Promise<SignupResult>
 
 async function fetchVerify(verificationLink: string): Promise<boolean> {
   try {
-    const res = await fetch(verificationLink, {
+    const { proxiedFetch } = await import('@/lib/http/proxied-fetch');
+    const res = await proxiedFetch(verificationLink, {
       method: 'GET',
       headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' },
       redirect: 'follow',
