@@ -23,7 +23,7 @@
  */
 
 import puppeteerCore from 'puppeteer-core';
-import { is2CaptchaConfigured, solveRecaptchaV2, solveRecaptchaV3, solveTurnstile } from '@/lib/captcha';
+import { isCaptchaConfigured, solveRecaptcha } from '@/lib/captcha';
 
 // ─── Types ───
 
@@ -282,32 +282,23 @@ async function handleRecaptcha(page: AnyPage, steps: string[]): Promise<boolean>
 
   steps.push('reCAPTCHA detected — attempting to solve...');
 
-  // Strategy 1: Try 2captcha service (direct API)
-  if (is2CaptchaConfigured()) {
+  // Strategy 1: NoCaptchaAI / 2captcha (solveRecaptcha tries v2 then v3)
+  if (isCaptchaConfigured()) {
     try {
-      steps.push('Using 2captcha service (direct API)...');
+      steps.push('Solving captcha via NoCaptchaAI/2captcha...');
       const siteKey = await page.evaluate(() => {
         const iframe = document.querySelector('#robot iframe') as HTMLIFrameElement;
         if (iframe) {
           const url = new URL(iframe.src);
           return url.searchParams.get('k');
         }
-        // Also check for data-sitekey attribute
         const siteKeyEl = document.querySelector('[data-sitekey]');
         if (siteKeyEl) return siteKeyEl.getAttribute('data-sitekey');
         return null;
       });
 
       if (siteKey) {
-        // Try reCAPTCHA v2 first
-        const v2Result = await solveRecaptchaV2(siteKey, page.url());
-        let token = v2Result.success ? v2Result.solution?.gRecaptchaResponse : null;
-
-        // If v2 fails, try v3
-        if (!token) {
-          const v3Result = await solveRecaptchaV3(siteKey, page.url(), 0.3, 'register');
-          token = v3Result.success ? v3Result.solution?.gRecaptchaResponse : null;
-        }
+        const token = await solveRecaptcha(siteKey, page.url());
 
         if (token) {
           await page.evaluate((t: string) => {
@@ -316,13 +307,12 @@ async function handleRecaptcha(page: AnyPage, steps: string[]): Promise<boolean>
               textarea.value = t;
               textarea.dispatchEvent(new Event('input', { bubbles: true }));
             }
-            // Try callback
             const successCallback = (window as any).___grecaptcha_cfg?.clients?.['0']?.callback;
             if (typeof successCallback === 'function') {
               successCallback(t);
             }
           }, token);
-          steps.push('2captcha solution injected');
+          steps.push('Captcha solved — token injected');
           await sleep(3000);
           return true;
         }
@@ -330,7 +320,7 @@ async function handleRecaptcha(page: AnyPage, steps: string[]): Promise<boolean>
         steps.push('Could not extract reCAPTCHA sitekey from page');
       }
     } catch (err) {
-      steps.push(`2captcha failed: ${(err as Error).message?.substring(0, 80)}`);
+      steps.push(`Captcha solve failed: ${(err as Error).message?.substring(0, 80)}`);
     }
   }
 

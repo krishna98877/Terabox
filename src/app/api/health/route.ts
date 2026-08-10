@@ -6,7 +6,7 @@ import { isPoolActive, getWorkerStates, getMaxWorkers } from '@/lib/automation/s
 import { isBrowserAvailable, getBrowserStatus } from '@/lib/browser';
 import { getProxyStatus } from '@/lib/proxy';
 import { getKeepAliveStatus } from '@/lib/keepalive';
-import { is2CaptchaConfigured, getBalance } from '@/lib/captcha';
+import { isCaptchaConfigured, getBalance, getActiveProvider } from '@/lib/captcha';
 
 /**
  * Health check endpoint — reports full system status.
@@ -21,7 +21,8 @@ export async function GET() {
     const browserStatus = getBrowserStatus();
     const proxyStatus = getProxyStatus();
     const keepAliveStatus = getKeepAliveStatus();
-    const captchaConfigured = is2CaptchaConfigured();
+    const captchaConfigured = isCaptchaConfigured();
+    const captchaProvider = getActiveProvider();
     let captchaBalance: { balance: number; error?: string } | null = null;
     if (captchaConfigured) {
       captchaBalance = await getBalance().catch(() => ({ balance: 0, error: 'fetch failed' }));
@@ -76,8 +77,15 @@ export async function GET() {
         requiresAccountCreation: false,
       },
       captcha: {
-        provider: '2captcha',
         configured: captchaConfigured,
+        activeProvider: captchaProvider,
+        noCaptchaAi: {
+          configured: !!process.env.NOCAPTCHA_API_KEY,
+          freeTier: '6000 solves/month',
+        },
+        twoCaptcha: {
+          configured: !!process.env.TWOCAPTCHA_API_KEY,
+        },
         balance: captchaBalance?.balance,
         supportedTypes: ['reCAPTCHA v2', 'reCAPTCHA v3', 'Turnstile', 'Image CAPTCHA'],
       },

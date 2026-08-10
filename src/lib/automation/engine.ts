@@ -54,7 +54,7 @@ import {
   getRecaptchaSiteKey,
 } from '@/lib/terabox/api';
 import type { ProxyInfo } from '@/lib/proxy';
-import { is2CaptchaConfigured, solveRecaptchaV2, solveRecaptchaV3 } from '@/lib/captcha';
+import { isCaptchaConfigured, solveRecaptcha } from '@/lib/captcha';
 
 // ─── Types ───
 
@@ -194,9 +194,9 @@ async function executeApiSignup(
     if (sendResult.needsCaptcha) {
       steps.push('reCAPTCHA required — attempting to solve...');
 
-      if (is2CaptchaConfigured()) {
+      if (isCaptchaConfigured()) {
         const siteKey = getRecaptchaSiteKey();
-        const captchaToken = await solveRecaptcha(siteKey, referralLink);
+        const captchaToken = await solveCaptchaForSignup(siteKey, referralLink);
 
         if (captchaToken) {
           gIdentity = captchaToken;
@@ -289,32 +289,14 @@ function generateApiPassword(length = 14): string {
   return Array.from({ length }, () => c[Math.floor(Math.random() * c.length)]).join('');
 }
 
-// ─── Captcha Solving via 2captcha (direct API — no npm pkg dependency) ───
+// ─── Captcha Solving (NoCaptchaAI primary + 2captcha fallback) ───
 
-async function solveRecaptcha(siteKey: string, pageUrl: string): Promise<string | null> {
-  if (!is2CaptchaConfigured()) {
-    console.warn('[Engine] TWOCAPTCHA_API_KEY not set — cannot solve captcha');
+async function solveCaptchaForSignup(siteKey: string, pageUrl: string): Promise<string | null> {
+  if (!isCaptchaConfigured()) {
+    console.warn('[Engine] No captcha solver configured. Set NOCAPTCHA_API_KEY (6k free/mo) or TWOCAPTCHA_API_KEY');
     return null;
   }
-  try {
-    // Try reCAPTCHA v2 first (most common for TeraBox)
-    const result = await solveRecaptchaV2(siteKey, pageUrl);
-    if (result.success && result.solution?.gRecaptchaResponse) {
-      return result.solution.gRecaptchaResponse;
-    }
-
-    // If v2 fails, try v3 with low score threshold
-    const v3Result = await solveRecaptchaV3(siteKey, pageUrl, 0.3, 'register');
-    if (v3Result.success && v3Result.solution?.gRecaptchaResponse) {
-      return v3Result.solution.gRecaptchaResponse;
-    }
-
-    console.error('[Engine] 2captcha both v2 and v3 failed:', result.error, v3Result.error);
-    return null;
-  } catch (err) {
-    console.error('[Engine] 2captcha solve failed:', (err as Error).message);
-    return null;
-  }
+  return solveRecaptcha(siteKey, pageUrl);
 }
 
 // ─── Core Workflow ───
