@@ -14,7 +14,7 @@
  * 2. GET /api/shorturlinfo → get shareid, uk, sign for the shared file
  * 3. Create temp email via CatchMail.io
  * 4. POST /passport/register_v4/sendcode → send OTP to email
- * 5. If captcha required: solve via NoCaptchaAI → retry with g_identity
+ * 5. If captcha required: solve via CaptchaSolv → retry with g_identity
  * 6. Poll CatchMail.io inbox for OTP email
  * 7. POST /passport/register_v4/verify → verify OTP
  * 8. POST /passport/register_v4/finish → set password, complete
@@ -218,7 +218,7 @@ async function executeApiSignup(
           steps.push('Captcha solving failed — no 2captcha key or solve failed');
         }
       } else {
-        steps.push('No TWOCAPTCHA_API_KEY — cannot solve captcha via API');
+        steps.push('No CAPTCHASOLV_API_KEY — cannot solve captcha via API');
       }
     }
 
@@ -300,11 +300,11 @@ function generateApiPassword(length = 14): string {
   return Array.from({ length }, () => c[Math.floor(Math.random() * c.length)]).join('');
 }
 
-// ─── Captcha Solving (NoCaptchaAI primary + 2captcha fallback) ───
+// ─── Captcha Solving (CaptchaSolv — 100 free solves/day) ───
 
 async function solveCaptchaForSignup(siteKey: string, pageUrl: string): Promise<string | null> {
   if (!isCaptchaConfigured()) {
-    console.warn('[Engine] No captcha solver configured. Set NOCAPTCHA_API_KEY (6k free/mo) or TWOCAPTCHA_API_KEY');
+    console.warn('[Engine] No captcha solver configured. Set CAPTCHASOLV_API_KEY (100 free/day)');
     return null;
   }
   return solveRecaptcha(siteKey, pageUrl);

@@ -1,52 +1,34 @@
 /**
- * CAPTCHA Solver Module — NopeCHA (primary) + NoCaptchaAI + 2Captcha (fallback).
+ * CAPTCHA Solver Module — CaptchaSolv (primary & only provider).
  *
  * ═══════════════════════════════════════════════════════════════════
- * NopeCHA: FREE! 100 credits/day (daily reset — never runs out!)
- *   Token API: 20 credits/solve = 5 reCAPTCHA tokens/day free
- *   Recognition API: 1 credit/solve = 100 image solves/day free
- *   Turnstile: 1 credit/solve = 100/day free
- *   hCaptcha: 10 credits/solve = 10/day free
- *   Works WITHOUT API key on residential IP!
- *   Set NOPECHA_API_KEY for server/datacenter IPs
+ * CaptchaSolv: Fast & reliable, 100 FREE solves/day
  * ═══════════════════════════════════════════════════════════════════
  *
- * NoCaptchaAI: 6,000 FREE solves (one-time, no reset).
- *   - reCAPTCHA v2/v3, Turnstile, GeeTest, ImageToText
- *   - Set NOCAPTCHA_API_KEY env var
+ * - 2captcha-compatible API format
+ * - Sync endpoint: POST /solve (handles polling internally)
+ * - 10+ captcha types, average solve time < 15s
+ * - reCAPTCHA v2 (7-40s), v3 (3-5s), Turnstile (4-7s), hCaptcha, GeeTest v4
+ * - Get API key via Discord: use /panel command in CaptchaSolv Discord
+ * - Set CAPTCHASOLV_API_KEY env var
  *
- * 2Captcha: Paid fallback (~$1-3/1000 solves).
- *   - Set TWOCAPTCHA_API_KEY env var
- *
- * Priority: NopeCHA (Token API) → NoCaptchaAI → 2captcha → null
+ * Docs: https://docs.captchasolv.com/
+ * Base URL: https://v1.captchasolv.com
  */
 
 import {
-  solveRecaptchaV2 as nopechaSolveV2,
-  solveRecaptchaV3 as nopechaSolveV3,
-  solveTurnstile as nopechaSolveTurnstile,
-  solveHCaptcha as nopechaSolveHCaptcha,
-  isConfigured as isNopechaConfigured,
-  hasApiKey as hasNopechaApiKey,
-  getStatus as nopechaGetStatus,
-  getBalance as nopechaGetBalance,
-} from './nopecha';
-import {
-  solveRecaptchaV2 as noCaptchaSolveV2,
-  solveRecaptchaV3 as noCaptchaSolveV3,
-  solveTurnstile as noCaptchaSolveTurnstile,
-  solveImageCaptcha as noCaptchaSolveImage,
-  isConfigured as isNoCaptchaConfigured,
-  getBalance as noCaptchaGetBalance,
-} from './nocaptchaai';
-import {
-  solveRecaptchaV2 as twoCaptchaSolveV2,
-  solveRecaptchaV3 as twoCaptchaSolveV3,
-  solveTurnstile as twoCaptchaSolveTurnstile,
-  solveImageCaptcha as twoCaptchaSolveImage,
-  isConfigured as is2CaptchaInternalConfigured,
-  getBalance as twoCaptchaGetBalance,
-} from './twocaptcha';
+  solveRecaptchaV2 as captchasolvSolveV2,
+  solveRecaptchaV3 as captchasolvSolveV3,
+  solveTurnstile as captchasolvSolveTurnstile,
+  solveHCaptcha as captchasolvSolveHCaptcha,
+  solveGeeTestV4 as captchasolvSolveGeeTestV4,
+  solveCustom as captchasolvSolveCustom,
+  isConfigured as isCaptchaSolvConfigured,
+  getBalance as captchasolvGetBalance,
+  healthCheck as captchasolvHealthCheck,
+  getSupportedTypes as captchasolvGetTypes,
+  TASK_TYPES,
+} from './captchasolv';
 
 // ─── Types ───
 
@@ -64,38 +46,16 @@ export interface SolveResult {
   error?: string;
   errorCode?: string;
   provider?: string;
-  apiUsed?: 'token' | 'recognition';
-  creditsUsed?: number;
 }
 
 // ─── Provider Detection ───
 
-/**
- * Check if any CAPTCHA solver is available.
- * NopeCHA always returns true (works on residential IP without API key).
- * If NopeCHA fails (server IP), we fall back to NoCaptchaAI or 2Captcha.
- */
 export function isCaptchaConfigured(): boolean {
-  return isNopechaConfigured() || isNoCaptchaConfigured() || is2CaptchaInternalConfigured();
+  return isCaptchaSolvConfigured();
 }
 
-export function getActiveProvider(): 'nopecha' | 'nocaptchaai' | '2captcha' | null {
-  // NopeCHA always tries first (free, fast)
-  if (isNopechaConfigured()) return 'nopecha';
-  if (isNoCaptchaConfigured()) return 'nocaptchaai';
-  if (is2CaptchaInternalConfigured()) return '2captcha';
-  return null;
-}
-
-/**
- * Get all configured providers (for status display).
- */
-export function getConfiguredProviders(): { name: string; configured: boolean; hasKey: boolean }[] {
-  return [
-    { name: 'nopecha', configured: isNopechaConfigured(), hasKey: hasNopechaApiKey() },
-    { name: 'nocaptchaai', configured: isNoCaptchaConfigured(), hasKey: isNoCaptchaConfigured() },
-    { name: '2captcha', configured: is2CaptchaInternalConfigured(), hasKey: is2CaptchaInternalConfigured() },
-  ];
+export function getActiveProvider(): 'captchasolv' | null {
+  return isCaptchaSolvConfigured() ? 'captchasolv' : null;
 }
 
 // ─── reCAPTCHA v2 ───
@@ -105,36 +65,10 @@ export async function solveRecaptchaV2(
   pageUrl: string,
   invisible = false
 ): Promise<SolveResult> {
-  // Try NopeCHA first (Token API: 5/day free, or 100/day with Recognition)
-  if (isNopechaConfigured()) {
-    try {
-      const result = await nopechaSolveV2(siteKey, pageUrl, invisible);
-      if (result.success) return { ...result, provider: 'nopecha' };
-      // Don't log FREE_TIER_INELIGIBLE as a warning — it just means server IP
-      if (result.errorCode !== 'FREE_TIER_INELIGIBLE') {
-        console.warn(`[Captcha] NopeCHA v2 failed: ${result.error} (${result.errorCode}) — trying next provider`);
-      } else {
-        console.info(`[Captcha] NopeCHA free tier blocked (server IP) — trying next provider`);
-      }
-    } catch (err) {
-      console.warn(`[Captcha] NopeCHA v2 exception: ${(err as Error).message}`);
-    }
+  if (!isCaptchaSolvConfigured()) {
+    return { success: false, error: 'CAPTCHASOLV_API_KEY not set' };
   }
-
-  // Try NoCaptchaAI (6k free one-time)
-  if (isNoCaptchaConfigured()) {
-    const result = await noCaptchaSolveV2(siteKey, pageUrl, invisible);
-    if (result.success) return { ...result, provider: 'nocaptchaai' };
-    console.warn(`[Captcha] NoCaptchaAI v2 failed: ${result.error} — trying 2captcha`);
-  }
-
-  // Fallback to 2captcha
-  if (is2CaptchaInternalConfigured()) {
-    const result = await twoCaptchaSolveV2(siteKey, pageUrl, invisible);
-    if (result.success) return { ...result, provider: '2captcha' };
-  }
-
-  return { success: false, error: 'No captcha solver available or all failed', provider: getActiveProvider() || 'none' };
+  return captchasolvSolveV2(siteKey, pageUrl, invisible);
 }
 
 // ─── reCAPTCHA v3 ───
@@ -145,30 +79,10 @@ export async function solveRecaptchaV3(
   minScore = 0.3,
   action = ''
 ): Promise<SolveResult> {
-  if (isNopechaConfigured()) {
-    try {
-      const result = await nopechaSolveV3(siteKey, pageUrl, minScore, action);
-      if (result.success) return { ...result, provider: 'nopecha' };
-      if (result.errorCode !== 'FREE_TIER_INELIGIBLE') {
-        console.warn(`[Captcha] NopeCHA v3 failed: ${result.error} — trying next provider`);
-      }
-    } catch (err) {
-      console.warn(`[Captcha] NopeCHA v3 exception: ${(err as Error).message}`);
-    }
+  if (!isCaptchaSolvConfigured()) {
+    return { success: false, error: 'CAPTCHASOLV_API_KEY not set' };
   }
-
-  if (isNoCaptchaConfigured()) {
-    const result = await noCaptchaSolveV3(siteKey, pageUrl, minScore, action);
-    if (result.success) return { ...result, provider: 'nocaptchaai' };
-    console.warn(`[Captcha] NoCaptchaAI v3 failed: ${result.error} — trying 2captcha`);
-  }
-
-  if (is2CaptchaInternalConfigured()) {
-    const result = await twoCaptchaSolveV3(siteKey, pageUrl, minScore, action);
-    if (result.success) return { ...result, provider: '2captcha' };
-  }
-
-  return { success: false, error: 'No captcha solver available or all failed', provider: getActiveProvider() || 'none' };
+  return captchasolvSolveV3(siteKey, pageUrl, minScore, action);
 }
 
 // ─── Cloudflare Turnstile ───
@@ -177,30 +91,10 @@ export async function solveTurnstile(
   siteKey: string,
   pageUrl: string
 ): Promise<SolveResult> {
-  // NopeCHA Turnstile: 1 credit/solve = 100/day free! Best deal.
-  if (isNopechaConfigured()) {
-    try {
-      const result = await nopechaSolveTurnstile(siteKey, pageUrl);
-      if (result.success) return { ...result, provider: 'nopecha' };
-      if (result.errorCode !== 'FREE_TIER_INELIGIBLE') {
-        console.warn(`[Captcha] NopeCHA Turnstile failed: ${result.error}`);
-      }
-    } catch (err) {
-      console.warn(`[Captcha] NopeCHA Turnstile exception: ${(err as Error).message}`);
-    }
+  if (!isCaptchaSolvConfigured()) {
+    return { success: false, error: 'CAPTCHASOLV_API_KEY not set' };
   }
-
-  if (isNoCaptchaConfigured()) {
-    const result = await noCaptchaSolveTurnstile(siteKey, pageUrl);
-    if (result.success) return { ...result, provider: 'nocaptchaai' };
-  }
-
-  if (is2CaptchaInternalConfigured()) {
-    const result = await twoCaptchaSolveTurnstile(siteKey, pageUrl);
-    if (result.success) return { ...result, provider: '2captcha' };
-  }
-
-  return { success: false, error: 'No captcha solver available or all failed' };
+  return captchasolvSolveTurnstile(siteKey, pageUrl);
 }
 
 // ─── hCaptcha ───
@@ -209,96 +103,66 @@ export async function solveHCaptcha(
   siteKey: string,
   pageUrl: string
 ): Promise<SolveResult> {
-  // NopeCHA hCaptcha: 10 credits/solve = 10/day free
-  if (isNopechaConfigured()) {
-    try {
-      const result = await nopechaSolveHCaptcha(siteKey, pageUrl);
-      if (result.success) return { ...result, provider: 'nopecha' };
-    } catch (err) {
-      console.warn(`[Captcha] NopeCHA hCaptcha exception: ${(err as Error).message}`);
-    }
+  if (!isCaptchaSolvConfigured()) {
+    return { success: false, error: 'CAPTCHASOLV_API_KEY not set' };
   }
-
-  // NoCaptchaAI and 2captcha don't have hCaptcha in current impl
-  return { success: false, error: 'No hCaptcha solver available' };
+  return captchasolvSolveHCaptcha(siteKey, pageUrl);
 }
 
-// ─── Image CAPTCHA ───
+// ─── Image CAPTCHA (not supported by CaptchaSolv) ───
 
 export async function solveImageCaptcha(
-  imageBase64: string,
-  options?: { phrase?: boolean; caseSensitive?: boolean; numeric?: number; minLength?: number; maxLength?: number; comment?: string }
+  _imageBase64: string,
+  _options?: { phrase?: boolean; caseSensitive?: boolean; numeric?: number; minLength?: number; maxLength?: number; comment?: string }
 ): Promise<SolveResult> {
-  if (isNoCaptchaConfigured()) {
-    const result = await noCaptchaSolveImage(imageBase64, options);
-    if (result.success) return { ...result, provider: 'nocaptchaai' };
-  }
-
-  if (is2CaptchaInternalConfigured()) {
-    const result = await twoCaptchaSolveImage(imageBase64, options);
-    if (result.success) return { ...result, provider: '2captcha' };
-  }
-
-  return { success: false, error: 'No captcha solver available or all failed' };
+  return { success: false, error: 'Image CAPTCHA not supported by CaptchaSolv' };
 }
 
-// ─── Balance / Status Check ───
+// ─── Balance / Status ───
 
 export async function getBalance(): Promise<{ balance: number; error?: string; provider?: string }> {
-  const provider = getActiveProvider();
-  if (provider === 'nopecha') {
-    const result = await nopechaGetBalance();
-    return { ...result, provider: 'nopecha' };
-  }
-  if (provider === 'nocaptchaai') {
-    const result = await noCaptchaGetBalance();
-    return { ...result, provider: 'nocaptchaai' };
-  }
-  if (provider === '2captcha') {
-    const result = await twoCaptchaGetBalance();
-    return { ...result, provider: '2captcha' };
-  }
-  return { balance: 0, error: 'No captcha provider configured' };
+  const result = await captchasolvGetBalance();
+  return { ...result, provider: 'captchasolv' };
 }
 
-/**
- * Get NopeCHA status with full details (credits, TTL, plan, etc).
- */
-export async function getNopechaStatus() {
-  return nopechaGetStatus();
+export async function getHealth() {
+  return captchasolvHealthCheck();
+}
+
+export async function getSupportedTypes() {
+  return captchasolvGetTypes();
 }
 
 // ─── Convenience: solve reCAPTCHA (tries v2 then v3) ───
 
 export async function solveRecaptcha(siteKey: string, pageUrl: string): Promise<string | null> {
-  if (!isCaptchaConfigured()) {
-    console.warn('[Captcha] No provider configured (set NOPECHA_API_KEY, NOCAPTCHA_API_KEY, or TWOCAPTCHA_API_KEY)');
+  if (!isCaptchaSolvConfigured()) {
+    console.warn('[Captcha] CAPTCHASOLV_API_KEY not set — CAPTCHA solving disabled');
     return null;
   }
 
-  const provider = getActiveProvider();
-  console.log(`[Captcha] Solving reCAPTCHA for ${pageUrl.substring(0, 60)}... (provider: ${provider})`);
+  console.log(`[Captcha] Solving reCAPTCHA for ${pageUrl.substring(0, 60)}... (provider: captchasolv)`);
 
   try {
     // Try v2 first (most common for TeraBox)
     const v2 = await solveRecaptchaV2(siteKey, pageUrl);
     if (v2.success && v2.solution?.token) {
-      console.log(`[Captcha] v2 solved by ${v2.provider}${v2.solveTime ? ` in ${v2.solveTime.toFixed(1)}s` : ''}${v2.creditsUsed ? ` (${v2.creditsUsed} credits)` : ''}`);
+      console.log(`[Captcha] v2 solved${v2.solveTime ? ` in ${v2.solveTime.toFixed(1)}s` : ''}${v2.cost ? ` (cost: ${v2.cost})` : ''}`);
       return v2.solution.token;
     }
     if (v2.success && v2.solution?.gRecaptchaResponse) {
-      console.log(`[Captcha] v2 solved by ${v2.provider}${v2.solveTime ? ` in ${v2.solveTime.toFixed(1)}s` : ''}`);
+      console.log(`[Captcha] v2 solved${v2.solveTime ? ` in ${v2.solveTime.toFixed(1)}s` : ''}`);
       return v2.solution.gRecaptchaResponse;
     }
 
     // Try v3 fallback
     const v3 = await solveRecaptchaV3(siteKey, pageUrl, 0.3, 'register');
     if (v3.success && v3.solution?.token) {
-      console.log(`[Captcha] v3 solved by ${v3.provider}${v3.solveTime ? ` in ${v3.solveTime.toFixed(1)}s` : ''}`);
+      console.log(`[Captcha] v3 solved${v3.solveTime ? ` in ${v3.solveTime.toFixed(1)}s` : ''}`);
       return v3.solution.token;
     }
     if (v3.success && v3.solution?.gRecaptchaResponse) {
-      console.log(`[Captcha] v3 solved by ${v3.provider}${v2.solveTime ? ` in ${v3.solveTime.toFixed(1)}s` : ''}`);
+      console.log(`[Captcha] v3 solved${v3.solveTime ? ` in ${v3.solveTime.toFixed(1)}s` : ''}`);
       return v3.solution.gRecaptchaResponse;
     }
 
@@ -310,5 +174,6 @@ export async function solveRecaptcha(siteKey: string, pageUrl: string): Promise<
   }
 }
 
-// Backwards compat
+// ─── Backwards compat ───
 export const is2CaptchaConfigured = isCaptchaConfigured;
+export { TASK_TYPES };

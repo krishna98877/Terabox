@@ -6,7 +6,7 @@ import { isPoolActive, getWorkerStates, getMaxWorkers } from '@/lib/automation/s
 import { isBrowserAvailable, getBrowserStatus } from '@/lib/browser';
 import { getProxyStatus } from '@/lib/proxy';
 import { getKeepAliveStatus } from '@/lib/keepalive';
-import { isCaptchaConfigured, getBalance, getActiveProvider, getNopechaStatus, getConfiguredProviders } from '@/lib/captcha';
+import { isCaptchaConfigured, getBalance, getActiveProvider, getHealth, getSupportedTypes } from '@/lib/captcha';
 
 /**
  * Health check endpoint — reports full system status.
@@ -28,25 +28,21 @@ export async function GET() {
       captchaBalance = await getBalance().catch(() => ({ balance: 0, error: 'fetch failed' }));
     }
 
-    // Get NopeCHA status with full details
-    let nopechaStatus: Record<string, unknown> | null = null;
+    // Check CaptchaSolv API health
+    let captchaSolvHealth: { ok: boolean; service?: string; error?: string } | null = null;
     try {
-      const ns = await getNopechaStatus();
-      nopechaStatus = {
-        plan: ns.plan,
-        status: ns.status,
-        credit: ns.credit,
-        quota: ns.quota,
-        ttl: ns.ttl,
-        ttlFormatted: ns.ttl ? `${Math.floor(ns.ttl / 3600)}h ${Math.floor((ns.ttl % 3600) / 60)}m` : 'N/A',
-        duration: ns.duration,
-        error: ns.error,
-      };
+      captchaSolvHealth = await getHealth();
     } catch {
-      nopechaStatus = null;
+      captchaSolvHealth = null;
     }
 
-    const captchaProviders = getConfiguredProviders();
+    // Get supported types
+    let supportedCaptchaTypes: string[] = [];
+    try {
+      supportedCaptchaTypes = await getSupportedTypes();
+    } catch {
+      // ignore
+    }
 
     return NextResponse.json({
       status: 'ok',
@@ -99,28 +95,30 @@ export async function GET() {
       captcha: {
         configured: captchaConfigured,
         activeProvider: captchaProvider,
-        providers: captchaProviders,
-        nopecha: {
-          configured: true, // Always available (IP-based free tier)
-          hasApiKey: !!process.env.NOPECHA_API_KEY,
-          status: nopechaStatus,
-          tokenApi: { cost: '20 credits/solve', freeSolvesPerDay: 5, endpoint: '/v1/token/recaptcha_v2' },
-          recognitionApi: { cost: '1 credit/solve', freeSolvesPerDay: 100, endpoint: '/v1/recognition/recaptcha' },
-          turnstileApi: { cost: '1 credit/solve', freeSolvesPerDay: 100, endpoint: '/v1/token/turnstile' },
-          priority: 1,
-        },
-        noCaptchaAi: {
-          configured: !!process.env.NOCAPTCHA_API_KEY,
-          freeTier: '6000 solves (one-time)',
-          priority: 2,
-        },
-        twoCaptcha: {
-          configured: !!process.env.TWOCAPTCHA_API_KEY,
-          priority: 3,
+        captchasolv: {
+          configured: !!process.env.CAPTCHASOLV_API_KEY,
+          freeSolvesPerDay: 100,
+          apiHealth: captchaSolvHealth,
+          baseUrl: 'https://v1.captchasolv.com',
+          docs: 'https://docs.captchasolv.com/',
+          supportedTypes: supportedCaptchaTypes.length > 0 ? supportedCaptchaTypes : [
+            'RecaptchaV2TaskProxyless',
+            'RecaptchaV2InvisibleTaskProxyless',
+            'RecaptchaV3TaskProxyless',
+            'TurnstileTaskProxyless',
+            'HCaptchaTaskProxyless',
+            'GeeTestV4TaskProxyless',
+          ],
+          solveTimes: {
+            recaptchaV2: '7-40s',
+            recaptchaV3: '3-5s',
+            turnstile: '4-7s',
+            hCaptcha: '5-10s',
+            geeTest: '4-8s',
+          },
         },
         balance: captchaBalance?.balance,
         balanceProvider: captchaBalance?.provider,
-        supportedTypes: ['reCAPTCHA v2', 'reCAPTCHA v3', 'hCaptcha', 'Turnstile', 'Image CAPTCHA'],
       },
       stats: {
         totalSignups,

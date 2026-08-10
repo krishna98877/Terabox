@@ -101,7 +101,7 @@ export async function GET(request: Request) {
           action: 'captcha',
           provider: '2captcha',
           configured,
-          apiKeySet: configured ? 'yes' : 'no (set TWOCAPTCHA_API_KEY env var)',
+          apiKeySet: configured ? 'yes' : 'no (set CAPTCHASOLV_API_KEY env var)',
           balance: balance?.balance,
           balanceError: balance?.error,
           supportedTypes: ['reCAPTCHA v2', 'reCAPTCHA v3', 'Cloudflare Turnstile', 'Image CAPTCHA'],

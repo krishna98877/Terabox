@@ -282,10 +282,10 @@ async function handleRecaptcha(page: AnyPage, steps: string[]): Promise<boolean>
 
   steps.push('reCAPTCHA detected — attempting to solve...');
 
-  // Strategy 1: NoCaptchaAI / 2captcha (solveRecaptcha tries v2 then v3)
+  // Strategy 1: CaptchaSolv (solveRecaptcha tries v2 then v3)
   if (isCaptchaConfigured()) {
     try {
-      steps.push('Solving captcha via NoCaptchaAI/2captcha...');
+      steps.push('Solving captcha via CaptchaSolv...');
       const siteKey = await page.evaluate(() => {
         const iframe = document.querySelector('#robot iframe') as HTMLIFrameElement;
         if (iframe) {
