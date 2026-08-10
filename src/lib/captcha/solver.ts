@@ -1,10 +1,15 @@
 /**
  * CAPTCHA Solver Module — NopeCHA (primary) + NoCaptchaAI + 2Captcha (fallback).
  *
- * NopeCHA: 100 FREE solves/DAY (daily reset — never runs out!)
- *   - reCAPTCHA v2/v3, hCaptcha, GeeTest, FunCAPTCHA, Text CAPTCHA
- *   - API: POST /v1/recaptcha → GET /v1/recaptcha (simple submit/poll)
- *   - Set NOPECHA_API_KEY env var
+ * ═══════════════════════════════════════════════════════════════════
+ * NopeCHA: FREE! 100 credits/day (daily reset — never runs out!)
+ *   Token API: 20 credits/solve = 5 reCAPTCHA tokens/day free
+ *   Recognition API: 1 credit/solve = 100 image solves/day free
+ *   Turnstile: 1 credit/solve = 100/day free
+ *   hCaptcha: 10 credits/solve = 10/day free
+ *   Works WITHOUT API key on residential IP!
+ *   Set NOPECHA_API_KEY for server/datacenter IPs
+ * ═══════════════════════════════════════════════════════════════════
  *
  * NoCaptchaAI: 6,000 FREE solves (one-time, no reset).
  *   - reCAPTCHA v2/v3, Turnstile, GeeTest, ImageToText
@@ -13,12 +18,35 @@
  * 2Captcha: Paid fallback (~$1-3/1000 solves).
  *   - Set TWOCAPTCHA_API_KEY env var
  *
- * Priority: NopeCHA → NoCaptchaAI → 2captcha → null
+ * Priority: NopeCHA (Token API) → NoCaptchaAI → 2captcha → null
  */
 
-import { solveRecaptchaV2 as nopechaSolveV2, solveRecaptchaV3 as nopechaSolveV3, isConfigured as isNopechaConfigured, getBalance as nopechaGetBalance } from './nopecha';
-import { solveRecaptchaV2 as noCaptchaSolveV2, solveRecaptchaV3 as noCaptchaSolveV3, solveTurnstile as noCaptchaSolveTurnstile, solveImageCaptcha as noCaptchaSolveImage, isConfigured as isNoCaptchaConfigured, getBalance as noCaptchaGetBalance } from './nocaptchaai';
-import { solveRecaptchaV2 as twoCaptchaSolveV2, solveRecaptchaV3 as twoCaptchaSolveV3, solveTurnstile as twoCaptchaSolveTurnstile, solveImageCaptcha as twoCaptchaSolveImage, isConfigured as is2CaptchaInternalConfigured, getBalance as twoCaptchaGetBalance } from './twocaptcha';
+import {
+  solveRecaptchaV2 as nopechaSolveV2,
+  solveRecaptchaV3 as nopechaSolveV3,
+  solveTurnstile as nopechaSolveTurnstile,
+  solveHCaptcha as nopechaSolveHCaptcha,
+  isConfigured as isNopechaConfigured,
+  hasApiKey as hasNopechaApiKey,
+  getStatus as nopechaGetStatus,
+  getBalance as nopechaGetBalance,
+} from './nopecha';
+import {
+  solveRecaptchaV2 as noCaptchaSolveV2,
+  solveRecaptchaV3 as noCaptchaSolveV3,
+  solveTurnstile as noCaptchaSolveTurnstile,
+  solveImageCaptcha as noCaptchaSolveImage,
+  isConfigured as isNoCaptchaConfigured,
+  getBalance as noCaptchaGetBalance,
+} from './nocaptchaai';
+import {
+  solveRecaptchaV2 as twoCaptchaSolveV2,
+  solveRecaptchaV3 as twoCaptchaSolveV3,
+  solveTurnstile as twoCaptchaSolveTurnstile,
+  solveImageCaptcha as twoCaptchaSolveImage,
+  isConfigured as is2CaptchaInternalConfigured,
+  getBalance as twoCaptchaGetBalance,
+} from './twocaptcha';
 
 // ─── Types ───
 
@@ -36,19 +64,38 @@ export interface SolveResult {
   error?: string;
   errorCode?: string;
   provider?: string;
+  apiUsed?: 'token' | 'recognition';
+  creditsUsed?: number;
 }
 
 // ─── Provider Detection ───
 
+/**
+ * Check if any CAPTCHA solver is available.
+ * NopeCHA always returns true (works on residential IP without API key).
+ * If NopeCHA fails (server IP), we fall back to NoCaptchaAI or 2Captcha.
+ */
 export function isCaptchaConfigured(): boolean {
   return isNopechaConfigured() || isNoCaptchaConfigured() || is2CaptchaInternalConfigured();
 }
 
 export function getActiveProvider(): 'nopecha' | 'nocaptchaai' | '2captcha' | null {
+  // NopeCHA always tries first (free, fast)
   if (isNopechaConfigured()) return 'nopecha';
   if (isNoCaptchaConfigured()) return 'nocaptchaai';
   if (is2CaptchaInternalConfigured()) return '2captcha';
   return null;
+}
+
+/**
+ * Get all configured providers (for status display).
+ */
+export function getConfiguredProviders(): { name: string; configured: boolean; hasKey: boolean }[] {
+  return [
+    { name: 'nopecha', configured: isNopechaConfigured(), hasKey: hasNopechaApiKey() },
+    { name: 'nocaptchaai', configured: isNoCaptchaConfigured(), hasKey: isNoCaptchaConfigured() },
+    { name: '2captcha', configured: is2CaptchaInternalConfigured(), hasKey: is2CaptchaInternalConfigured() },
+  ];
 }
 
 // ─── reCAPTCHA v2 ───
@@ -58,11 +105,20 @@ export async function solveRecaptchaV2(
   pageUrl: string,
   invisible = false
 ): Promise<SolveResult> {
-  // Try NopeCHA first (100/day free, daily reset)
+  // Try NopeCHA first (Token API: 5/day free, or 100/day with Recognition)
   if (isNopechaConfigured()) {
-    const result = await nopechaSolveV2(siteKey, pageUrl, invisible);
-    if (result.success) return { ...result, provider: 'nopecha' };
-    console.warn(`[Captcha] NopeCHA v2 failed: ${result.error} — trying next provider`);
+    try {
+      const result = await nopechaSolveV2(siteKey, pageUrl, invisible);
+      if (result.success) return { ...result, provider: 'nopecha' };
+      // Don't log FREE_TIER_INELIGIBLE as a warning — it just means server IP
+      if (result.errorCode !== 'FREE_TIER_INELIGIBLE') {
+        console.warn(`[Captcha] NopeCHA v2 failed: ${result.error} (${result.errorCode}) — trying next provider`);
+      } else {
+        console.info(`[Captcha] NopeCHA free tier blocked (server IP) — trying next provider`);
+      }
+    } catch (err) {
+      console.warn(`[Captcha] NopeCHA v2 exception: ${(err as Error).message}`);
+    }
   }
 
   // Try NoCaptchaAI (6k free one-time)
@@ -90,9 +146,15 @@ export async function solveRecaptchaV3(
   action = ''
 ): Promise<SolveResult> {
   if (isNopechaConfigured()) {
-    const result = await nopechaSolveV3(siteKey, pageUrl, minScore, action);
-    if (result.success) return { ...result, provider: 'nopecha' };
-    console.warn(`[Captcha] NopeCHA v3 failed: ${result.error} — trying next provider`);
+    try {
+      const result = await nopechaSolveV3(siteKey, pageUrl, minScore, action);
+      if (result.success) return { ...result, provider: 'nopecha' };
+      if (result.errorCode !== 'FREE_TIER_INELIGIBLE') {
+        console.warn(`[Captcha] NopeCHA v3 failed: ${result.error} — trying next provider`);
+      }
+    } catch (err) {
+      console.warn(`[Captcha] NopeCHA v3 exception: ${(err as Error).message}`);
+    }
   }
 
   if (isNoCaptchaConfigured()) {
@@ -115,7 +177,19 @@ export async function solveTurnstile(
   siteKey: string,
   pageUrl: string
 ): Promise<SolveResult> {
-  // NopeCHA doesn't support Turnstile natively — skip to NoCaptchaAI
+  // NopeCHA Turnstile: 1 credit/solve = 100/day free! Best deal.
+  if (isNopechaConfigured()) {
+    try {
+      const result = await nopechaSolveTurnstile(siteKey, pageUrl);
+      if (result.success) return { ...result, provider: 'nopecha' };
+      if (result.errorCode !== 'FREE_TIER_INELIGIBLE') {
+        console.warn(`[Captcha] NopeCHA Turnstile failed: ${result.error}`);
+      }
+    } catch (err) {
+      console.warn(`[Captcha] NopeCHA Turnstile exception: ${(err as Error).message}`);
+    }
+  }
+
   if (isNoCaptchaConfigured()) {
     const result = await noCaptchaSolveTurnstile(siteKey, pageUrl);
     if (result.success) return { ...result, provider: 'nocaptchaai' };
@@ -127,6 +201,26 @@ export async function solveTurnstile(
   }
 
   return { success: false, error: 'No captcha solver available or all failed' };
+}
+
+// ─── hCaptcha ───
+
+export async function solveHCaptcha(
+  siteKey: string,
+  pageUrl: string
+): Promise<SolveResult> {
+  // NopeCHA hCaptcha: 10 credits/solve = 10/day free
+  if (isNopechaConfigured()) {
+    try {
+      const result = await nopechaSolveHCaptcha(siteKey, pageUrl);
+      if (result.success) return { ...result, provider: 'nopecha' };
+    } catch (err) {
+      console.warn(`[Captcha] NopeCHA hCaptcha exception: ${(err as Error).message}`);
+    }
+  }
+
+  // NoCaptchaAI and 2captcha don't have hCaptcha in current impl
+  return { success: false, error: 'No hCaptcha solver available' };
 }
 
 // ─── Image CAPTCHA ───
@@ -148,7 +242,7 @@ export async function solveImageCaptcha(
   return { success: false, error: 'No captcha solver available or all failed' };
 }
 
-// ─── Balance Check ───
+// ─── Balance / Status Check ───
 
 export async function getBalance(): Promise<{ balance: number; error?: string; provider?: string }> {
   const provider = getActiveProvider();
@@ -167,6 +261,13 @@ export async function getBalance(): Promise<{ balance: number; error?: string; p
   return { balance: 0, error: 'No captcha provider configured' };
 }
 
+/**
+ * Get NopeCHA status with full details (credits, TTL, plan, etc).
+ */
+export async function getNopechaStatus() {
+  return nopechaGetStatus();
+}
+
 // ─── Convenience: solve reCAPTCHA (tries v2 then v3) ───
 
 export async function solveRecaptcha(siteKey: string, pageUrl: string): Promise<string | null> {
@@ -182,22 +283,22 @@ export async function solveRecaptcha(siteKey: string, pageUrl: string): Promise<
     // Try v2 first (most common for TeraBox)
     const v2 = await solveRecaptchaV2(siteKey, pageUrl);
     if (v2.success && v2.solution?.token) {
-      console.log(`[Captcha] v2 solved by ${v2.provider}${v2.solveTime ? ` in ${v2.solveTime}s` : ''}`);
+      console.log(`[Captcha] v2 solved by ${v2.provider}${v2.solveTime ? ` in ${v2.solveTime.toFixed(1)}s` : ''}${v2.creditsUsed ? ` (${v2.creditsUsed} credits)` : ''}`);
       return v2.solution.token;
     }
     if (v2.success && v2.solution?.gRecaptchaResponse) {
-      console.log(`[Captcha] v2 solved by ${v2.provider}${v2.solveTime ? ` in ${v2.solveTime}s` : ''}`);
+      console.log(`[Captcha] v2 solved by ${v2.provider}${v2.solveTime ? ` in ${v2.solveTime.toFixed(1)}s` : ''}`);
       return v2.solution.gRecaptchaResponse;
     }
 
     // Try v3 fallback
     const v3 = await solveRecaptchaV3(siteKey, pageUrl, 0.3, 'register');
     if (v3.success && v3.solution?.token) {
-      console.log(`[Captcha] v3 solved by ${v3.provider}${v3.solveTime ? ` in ${v3.solveTime}s` : ''}`);
+      console.log(`[Captcha] v3 solved by ${v3.provider}${v3.solveTime ? ` in ${v3.solveTime.toFixed(1)}s` : ''}`);
       return v3.solution.token;
     }
     if (v3.success && v3.solution?.gRecaptchaResponse) {
-      console.log(`[Captcha] v3 solved by ${v3.provider}${v3.solveTime ? ` in ${v3.solveTime}s` : ''}`);
+      console.log(`[Captcha] v3 solved by ${v3.provider}${v2.solveTime ? ` in ${v3.solveTime.toFixed(1)}s` : ''}`);
       return v3.solution.gRecaptchaResponse;
     }
 

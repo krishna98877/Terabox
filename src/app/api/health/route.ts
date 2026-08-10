@@ -6,7 +6,7 @@ import { isPoolActive, getWorkerStates, getMaxWorkers } from '@/lib/automation/s
 import { isBrowserAvailable, getBrowserStatus } from '@/lib/browser';
 import { getProxyStatus } from '@/lib/proxy';
 import { getKeepAliveStatus } from '@/lib/keepalive';
-import { isCaptchaConfigured, getBalance, getActiveProvider } from '@/lib/captcha';
+import { isCaptchaConfigured, getBalance, getActiveProvider, getNopechaStatus, getConfiguredProviders } from '@/lib/captcha';
 
 /**
  * Health check endpoint — reports full system status.
@@ -23,10 +23,30 @@ export async function GET() {
     const keepAliveStatus = getKeepAliveStatus();
     const captchaConfigured = isCaptchaConfigured();
     const captchaProvider = getActiveProvider();
-    let captchaBalance: { balance: number; error?: string } | null = null;
+    let captchaBalance: { balance: number; error?: string; provider?: string } | null = null;
     if (captchaConfigured) {
       captchaBalance = await getBalance().catch(() => ({ balance: 0, error: 'fetch failed' }));
     }
+
+    // Get NopeCHA status with full details
+    let nopechaStatus: Record<string, unknown> | null = null;
+    try {
+      const ns = await getNopechaStatus();
+      nopechaStatus = {
+        plan: ns.plan,
+        status: ns.status,
+        credit: ns.credit,
+        quota: ns.quota,
+        ttl: ns.ttl,
+        ttlFormatted: ns.ttl ? `${Math.floor(ns.ttl / 3600)}h ${Math.floor((ns.ttl % 3600) / 60)}m` : 'N/A',
+        duration: ns.duration,
+        error: ns.error,
+      };
+    } catch {
+      nopechaStatus = null;
+    }
+
+    const captchaProviders = getConfiguredProviders();
 
     return NextResponse.json({
       status: 'ok',
@@ -79,9 +99,14 @@ export async function GET() {
       captcha: {
         configured: captchaConfigured,
         activeProvider: captchaProvider,
+        providers: captchaProviders,
         nopecha: {
-          configured: !!process.env.NOPECHA_API_KEY,
-          freeTier: '100 solves/day (daily reset)',
+          configured: true, // Always available (IP-based free tier)
+          hasApiKey: !!process.env.NOPECHA_API_KEY,
+          status: nopechaStatus,
+          tokenApi: { cost: '20 credits/solve', freeSolvesPerDay: 5, endpoint: '/v1/token/recaptcha_v2' },
+          recognitionApi: { cost: '1 credit/solve', freeSolvesPerDay: 100, endpoint: '/v1/recognition/recaptcha' },
+          turnstileApi: { cost: '1 credit/solve', freeSolvesPerDay: 100, endpoint: '/v1/token/turnstile' },
           priority: 1,
         },
         noCaptchaAi: {
@@ -94,6 +119,7 @@ export async function GET() {
           priority: 3,
         },
         balance: captchaBalance?.balance,
+        balanceProvider: captchaBalance?.provider,
         supportedTypes: ['reCAPTCHA v2', 'reCAPTCHA v3', 'hCaptcha', 'Turnstile', 'Image CAPTCHA'],
       },
       stats: {
