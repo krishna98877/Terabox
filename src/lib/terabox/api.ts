@@ -112,15 +112,19 @@ async function passportPost(
 export async function getPubKey(): Promise<{ pp1: string; pp2: string; pp4: string; pubkey: string } | null> {
   const { data } = await passportPost('/passport/getpubkey', {});
 
+  // TeraBox returns code: 0 on success (not errno)
   if (data.errno === 0 || data.code === 0) {
-    return {
+    const result = {
       pp1: data.data?.pp1 || data.pp1 || '',
       pp2: data.data?.pp2 || data.pp2 || '',
       pp4: data.data?.pp4 || data.pp4 || '',
-      pubkey: data.data?.pubkey || data.pubkey || '',
+      // TeraBox doesn't return a "pubkey" field — pp1 IS the RSA key (Base64 encoded)
+      pubkey: data.data?.pubkey || data.pubkey || data.data?.pp1 || data.pp1 || '',
     };
+    console.log(`[TeraBox API] getpubkey OK — pp1 length: ${result.pp1.length}, pp2: ${result.pp2}`);
+    return result;
   }
-  console.error('[TeraBox API] getpubkey failed:', data.errmsg || data);
+  console.error('[TeraBox API] getpubkey failed:', data.errmsg || data.msg || data);
   return null;
 }
 

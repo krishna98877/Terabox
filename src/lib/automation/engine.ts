@@ -364,11 +364,20 @@ export async function executeSignup(referralLink: string): Promise<SignupResult>
     await log('success', `Temp email created: ${tempEmail.address}`, signup.id);
 
     // ── Step 2: Try API-first signup (TeraBox Passport API) ──
-    await log('info', 'Attempting API signup (passport/register_v4)...', signup.id);
+    // NOTE: TeraBox usually requires captcha (errno 400090) for sendcode.
+    // Without 2captcha, this will fail fast and fall back to browser.
+    // With 2captcha configured, this can work end-to-end without a browser.
+    const shouldTryApi = TWOCAPTCHA_KEY || Math.random() < 0.2; // Always try if 2captcha set, otherwise 20% chance
+    let apiResult: { success: boolean; verificationCode?: string; password?: string; error?: string; steps: string[] } | null = null;
 
-    const apiResult = await executeApiSignup(tempEmail.address, referralLink, signup.id, proxy);
+    if (shouldTryApi) {
+      await log('info', 'Attempting API signup (passport/register_v4)...', signup.id);
+      apiResult = await executeApiSignup(tempEmail.address, referralLink, signup.id, proxy);
+    } else {
+      await log('info', 'Skipping API signup (no 2captcha, TeraBox always requires captcha) — using browser', signup.id);
+    }
 
-    if (apiResult.success) {
+    if (apiResult?.success) {
       // API signup succeeded — mark verified, cleanup, done
       await db.signupRecord.update({
         where: { id: signup.id },
@@ -405,8 +414,8 @@ export async function executeSignup(referralLink: string): Promise<SignupResult>
       };
     }
 
-    // API signup failed — log and fall through to browser method
-    await log('warn', `API signup failed: ${apiResult.error} — falling back to browser`, signup.id, { steps: apiResult.steps });
+    // API signup failed or skipped — log and fall through to browser method
+    await log('warn', `API signup ${apiResult ? 'failed' : 'skipped'}: ${apiResult?.error || 'captcha required'} — falling back to browser`, signup.id);
 
     // ── Step 3: Browser signup (fallback) — submit email to TeraBox ──
     await log('info', `Opening referral link in browser: ${referralLink}`, signup.id, {
