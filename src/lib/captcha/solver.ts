@@ -5,15 +5,13 @@
  * CaptchaSolv: Fast & reliable, 100 FREE solves/day
  * ═══════════════════════════════════════════════════════════════════
  *
- * Per official docs (https://docs.captchasolv.com/):
- * - 2captcha-compatible API format
- * - Sync endpoint: POST /solve (handles polling internally)
- * - 10+ captcha types, average solve time < 15s
- * - reCAPTCHA v2/v3, v2 Enterprise/v3 Enterprise, Turnstile, hCaptcha, GeeTest v4
- * - Get API key via Telegram bot or Discord /panel command
- * - Set CAPTCHASOLV_API_KEY env var
- * - waitForSlot: true queues instead of failing on rate limits
- * - Token expiry: ~2 min for reCAPTCHA — use immediately!
+ * ★★★ CRITICAL FIX: Proxy-bound captcha solving ★★★
+ * Enterprise reCAPTCHA binds the token to the solver's IP address.
+ * If you solve from CaptchaSolv's IP (Proxyless) but submit from your proxy IP,
+ * TeraBox REJECTS the token → errno 400090 loop!
+ *
+ * FIX: Always pass proxyUrl when you have a proxy.
+ * This uses *Task (with proxy) types → CaptchaSolv solves from SAME IP → token accepted!
  *
  * Docs: https://docs.captchasolv.com/
  * Base URL: https://v1.captchasolv.com
@@ -68,12 +66,13 @@ export function getActiveProvider(): 'captchasolv' | null {
 export async function solveRecaptchaV2(
   siteKey: string,
   pageUrl: string,
-  invisible = false
+  invisible = false,
+  proxyUrl?: string
 ): Promise<SolveResult> {
   if (!isCaptchaSolvConfigured()) {
     return { success: false, error: 'CAPTCHASOLV_API_KEY not set' };
   }
-  return captchasolvSolveV2(siteKey, pageUrl, invisible);
+  return captchasolvSolveV2(siteKey, pageUrl, invisible, proxyUrl);
 }
 
 // ─── reCAPTCHA v2 Enterprise ★ TeraBox uses this! ───
@@ -81,12 +80,13 @@ export async function solveRecaptchaV2(
 export async function solveRecaptchaV2Enterprise(
   siteKey: string,
   pageUrl: string,
-  invisible = false
+  invisible = false,
+  proxyUrl?: string
 ): Promise<SolveResult> {
   if (!isCaptchaSolvConfigured()) {
     return { success: false, error: 'CAPTCHASOLV_API_KEY not set' };
   }
-  return captchasolvSolveV2Enterprise(siteKey, pageUrl, invisible);
+  return captchasolvSolveV2Enterprise(siteKey, pageUrl, invisible, proxyUrl);
 }
 
 // ─── reCAPTCHA v3 ───
@@ -95,12 +95,13 @@ export async function solveRecaptchaV3(
   siteKey: string,
   pageUrl: string,
   minScore = 0.3,
-  action = ''
+  action = '',
+  proxyUrl?: string
 ): Promise<SolveResult> {
   if (!isCaptchaSolvConfigured()) {
     return { success: false, error: 'CAPTCHASOLV_API_KEY not set' };
   }
-  return captchasolvSolveV3(siteKey, pageUrl, minScore, action);
+  return captchasolvSolveV3(siteKey, pageUrl, minScore, action, proxyUrl);
 }
 
 // ─── reCAPTCHA v3 Enterprise ───
@@ -109,12 +110,13 @@ export async function solveRecaptchaV3Enterprise(
   siteKey: string,
   pageUrl: string,
   minScore = 0.3,
-  action = ''
+  action = '',
+  proxyUrl?: string
 ): Promise<SolveResult> {
   if (!isCaptchaSolvConfigured()) {
     return { success: false, error: 'CAPTCHASOLV_API_KEY not set' };
   }
-  return captchasolvSolveV3Enterprise(siteKey, pageUrl, minScore, action);
+  return captchasolvSolveV3Enterprise(siteKey, pageUrl, minScore, action, proxyUrl);
 }
 
 // ─── Cloudflare Turnstile ───
@@ -176,25 +178,31 @@ export async function getSupportedTypes() {
  *     - Standard v2 (errno 400090) as backup in parallel
  *   Phase 2: Enterprise v3 + Standard v3 IN PARALLEL (fast 3-5s each)
  *
+ * ★★★ CRITICAL: proxyUrl must be passed!
+ *   Enterprise reCAPTCHA binds token to solver IP.
+ *   Without proxy, token is from CaptchaSolv IP ≠ your proxy IP → REJECTED.
+ *   With proxy, CaptchaSolv solves from YOUR proxy IP → token accepted!
+ *
  * TeraBox errno 460030 = Enterprise reCAPTCHA
  * TeraBox errno 400090 = standard reCAPTCHA
  *
  * Per CaptchaSolv docs: token expires in ~2 min — use immediately!
  */
-export async function solveRecaptcha(siteKey: string, pageUrl: string): Promise<string | null> {
+export async function solveRecaptcha(siteKey: string, pageUrl: string, proxyUrl?: string): Promise<string | null> {
   if (!isCaptchaSolvConfigured()) {
     console.warn('[Captcha] CAPTCHASOLV_API_KEY not set — CAPTCHA solving disabled');
     return null;
   }
 
-  console.log(`[Captcha] Solving reCAPTCHA for ${pageUrl.substring(0, 60)}... (provider: captchasolv, parallel strategy)`);
+  const proxyLabel = proxyUrl ? `via proxy (${proxyUrl.substring(0, 30)}...)` : 'proxyless';
+  console.log(`[Captcha] Solving reCAPTCHA for ${pageUrl.substring(0, 60)}... (provider: captchasolv, parallel strategy, ${proxyLabel})`);
 
   try {
     // ★ Phase 1: Try v2 Enterprise + v2 Standard IN PARALLEL
     // This cuts solve time by ~50% since the first success wins
     const [v2Ent, v2] = await Promise.allSettled([
-      solveRecaptchaV2Enterprise(siteKey, pageUrl),
-      solveRecaptchaV2(siteKey, pageUrl),
+      solveRecaptchaV2Enterprise(siteKey, pageUrl, false, proxyUrl),
+      solveRecaptchaV2(siteKey, pageUrl, false, proxyUrl),
     ]);
 
     // Check Enterprise v2 result (TeraBox primarily uses Enterprise)
@@ -221,8 +229,8 @@ export async function solveRecaptcha(siteKey: string, pageUrl: string): Promise<
 
     // ★ Phase 2: Try v3 variants in parallel (fast 3-5s each)
     const [v3Ent, v3] = await Promise.allSettled([
-      solveRecaptchaV3Enterprise(siteKey, pageUrl, 0.3, 'register'),
-      solveRecaptchaV3(siteKey, pageUrl, 0.3, 'register'),
+      solveRecaptchaV3Enterprise(siteKey, pageUrl, 0.3, 'register', proxyUrl),
+      solveRecaptchaV3(siteKey, pageUrl, 0.3, 'register', proxyUrl),
     ]);
 
     const v3EntResult = v3Ent.status === 'fulfilled' ? v3Ent.value : null;

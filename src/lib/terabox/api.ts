@@ -18,6 +18,10 @@
  *
  * ★ Proxy support: setProxyUrl() allows rotating proxies for API calls,
  *   reducing captcha triggers from IP-based rate limits.
+ *
+ * ★★★ Session support: Cookie jar maintained between requests.
+ *   TeraBox uses cookies for session tracking, risk scoring, and referral attribution.
+ *   Without cookies, every request looks like a fresh suspicious hit → captcha!
  */
 
 import { HttpsProxyAgent } from 'https-proxy-agent';
@@ -46,6 +50,75 @@ export function setProxyUrl(url: string | null): void {
   if (url) {
     console.log(`[TeraBox API] Proxy set: ${url}`);
   }
+}
+
+// ─── Cookie Jar (session state) ───
+// TeraBox sets cookies on share link visits, login, etc.
+// We MUST persist and re-send these cookies to maintain session state.
+// Without cookies → TeraBox treats each request as new → higher captcha risk.
+
+let _cookieJar: Map<string, string> = new Map();
+
+/**
+ * Parse Set-Cookie headers and add to the jar.
+ */
+function storeCookies(setCookieHeaders: string[]): void {
+  for (const header of setCookieHeaders) {
+    // Parse "name=value; Path=/; Domain=.terabox.com; ..."
+    const parts = header.split(';')[0]; // Just the name=value part
+    const [name, ...valueParts] = parts.split('=');
+    if (name && valueParts.length > 0) {
+      _cookieJar.set(name.trim(), valueParts.join('=').trim());
+    }
+  }
+}
+
+/**
+ * Get the Cookie header string from the jar.
+ */
+function getCookieString(): string {
+  return Array.from(_cookieJar.entries())
+    .map(([name, value]) => `${name}=${value}`)
+    .join('; ');
+}
+
+/**
+ * Clear the cookie jar (for fresh sessions).
+ */
+export function clearCookies(): void {
+  _cookieJar = new Map();
+}
+
+/**
+ * Get current cookies (for debugging).
+ */
+export function getCookieCount(): number {
+  return _cookieJar.size;
+}
+
+// ─── Modern Chrome Headers ───
+// TeraBox risk detection checks for modern browser headers.
+// Missing sec-ch-ua, sec-fetch-* etc. flags the request as bot-like.
+
+const CHROME_VERSION = '126';
+const CHROME_FULL_VERSION = '126.0.0.0';
+
+function getChromeHeaders(baseUrl: string, extraHeaders: Record<string, string> = {}): Record<string, string> {
+  return {
+    'Content-Type': 'application/x-www-form-urlencoded',
+    'User-Agent': `Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${CHROME_FULL_VERSION} Safari/537.36`,
+    'Referer': `${baseUrl}/`,
+    'Origin': baseUrl,
+    'Accept': 'application/json, text/plain, */*',
+    'Accept-Language': 'en-US,en;q=0.9',
+    'sec-ch-ua': `"Not/A)Brand";v="8", "Chromium";v="${CHROME_VERSION}", "Google Chrome";v="${CHROME_VERSION}"`,
+    'sec-ch-ua-mobile': '?0',
+    'sec-ch-ua-platform': '"Windows"',
+    'sec-fetch-dest': 'empty',
+    'sec-fetch-mode': 'cors',
+    'sec-fetch-site': 'same-origin',
+    ...extraHeaders,
+  };
 }
 
 // ─── Types ───
@@ -89,15 +162,12 @@ async function passportPost(
   for (const baseUrl of BASE_URLS) {
     const url = `${baseUrl}${endpoint}?${paramStr}`;
 
-    const headers: Record<string, string> = {
-      'Content-Type': 'application/x-www-form-urlencoded',
-      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
-      'Referer': `${baseUrl}/`,
-      'Origin': baseUrl,
-      'Accept': 'application/json, text/plain, */*',
-      'Accept-Language': 'en-US,en;q=0.9',
-      ...extraHeaders,
-    };
+    // ★ Build headers with modern Chrome headers + cookies from session
+    const headers = getChromeHeaders(baseUrl, extraHeaders);
+    const cookieStr = getCookieString();
+    if (cookieStr) {
+      headers['Cookie'] = cookieStr;
+    }
 
     const body = new URLSearchParams(
       Object.entries(bodyParams).map(([k, v]) => [k, String(v)])
@@ -124,6 +194,12 @@ async function passportPost(
       }
 
       const res = await fetch(url, fetchOptions);
+
+      // ★ Store any Set-Cookie headers for session continuity
+      const setCookies = (res as any).headers?.getSetCookie?.() || [];
+      if (setCookies.length > 0) {
+        storeCookies(setCookies);
+      }
 
       const data = await res.json();
       // This domain worked — remember it for next time
@@ -401,16 +477,39 @@ export async function getShareInfo(shorturl: string): Promise<{
 
   for (const baseUrl of BASE_URLS) {
     try {
-      const res = await fetch(`${baseUrl}/api/shorturlinfo?${qs}`, {
-        headers: {
-          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
-          'Referer': `${baseUrl}/`,
-          'Accept': 'application/json, text/plain, */*',
-        },
+      const headers: Record<string, string> = {
+        'User-Agent': `Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${CHROME_FULL_VERSION} Safari/537.36`,
+        'Referer': `${baseUrl}/`,
+        'Accept': 'application/json, text/plain, */*',
+        'sec-ch-ua': `"Not/A)Brand";v="8", "Chromium";v="${CHROME_VERSION}", "Google Chrome";v="${CHROME_VERSION}"`,
+        'sec-ch-ua-mobile': '?0',
+        'sec-ch-ua-platform': '"Windows"',
+        'sec-fetch-dest': 'empty',
+        'sec-fetch-mode': 'cors',
+        'sec-fetch-site': 'same-origin',
+      };
+      const cookieStr = getCookieString();
+      if (cookieStr) headers['Cookie'] = cookieStr;
+
+      const fetchOptions: RequestInit & { dispatcher?: unknown } = {
+        headers,
         redirect: 'follow',
         signal: AbortSignal.timeout(15000),
         cache: 'no-store',
-      });
+      };
+
+      if (_proxyUrl) {
+        try {
+          const agent = new HttpsProxyAgent(_proxyUrl);
+          fetchOptions.dispatcher = agent;
+        } catch {}
+      }
+
+      const res = await fetch(`${baseUrl}/api/shorturlinfo?${qs}`, fetchOptions);
+
+      // Store cookies
+      const setCookies = (res as any).headers?.getSetCookie?.() || [];
+      if (setCookies.length > 0) storeCookies(setCookies);
 
       const data = await res.json();
       const errno = data.errno ?? data.error_code ?? data.code;
@@ -612,32 +711,63 @@ export function extractSurlFromLink(link: string): string {
 /**
  * Visit a share link — sets referral cookies and fires analytics.
  * This should be called BEFORE signup so the referral tracking is set.
+ *
+ * ★★★ IMPORTANT: This now stores cookies in the session jar, so subsequent
+ *   passport API calls will carry the referral cookies!
+ *   Without this, TeraBox can't attribute the signup to the referrer.
  */
 export async function visitShareLink(
   referralLink: string
 ): Promise<{ success: boolean; cookies?: string; error?: string }> {
   try {
-    const res = await fetch(referralLink, {
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Mobile Safari/537.36',
-        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-        'Accept-Language': 'en-US,en;q=0.9',
-      },
+    const headers: Record<string, string> = {
+      'User-Agent': `Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${CHROME_FULL_VERSION} Safari/537.36`,
+      'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
+      'Accept-Language': 'en-US,en;q=0.9',
+      'sec-ch-ua': `"Not/A)Brand";v="8", "Chromium";v="${CHROME_VERSION}", "Google Chrome";v="${CHROME_VERSION}"`,
+      'sec-ch-ua-mobile': '?0',
+      'sec-ch-ua-platform': '"Windows"',
+      'sec-fetch-dest': 'document',
+      'sec-fetch-mode': 'navigate',
+      'sec-fetch-site': 'none',
+      'sec-fetch-user': '?1',
+      'Upgrade-Insecure-Requests': '1',
+    };
+
+    // Add existing cookies
+    const cookieStr = getCookieString();
+    if (cookieStr) headers['Cookie'] = cookieStr;
+
+    const fetchOptions: RequestInit & { dispatcher?: unknown } = {
+      headers,
       redirect: 'follow',
       signal: AbortSignal.timeout(15000),
       cache: 'no-store',
-    });
+    };
 
-    // Extract set-cookie headers for referral tracking
-    const setCookies = res.headers.getSetCookie?.() || [];
-    const cookieStr = setCookies.join('; ');
+    // Apply proxy
+    if (_proxyUrl) {
+      try {
+        const agent = new HttpsProxyAgent(_proxyUrl);
+        fetchOptions.dispatcher = agent;
+      } catch {}
+    }
+
+    const res = await fetch(referralLink, fetchOptions);
+
+    // ★ Store ALL cookies from this response — this is how referral tracking works!
+    const setCookies = (res as any).headers?.getSetCookie?.() || [];
+    if (setCookies.length > 0) {
+      storeCookies(setCookies);
+      console.log(`[TeraBox API] Stored ${setCookies.length} cookies from share link visit (total: ${_cookieJar.size})`);
+    }
 
     // Fire analytics event for the share page view
     await trackAnalytics('share_page_view', referralLink);
 
     return {
       success: res.ok,
-      cookies: cookieStr || undefined,
+      cookies: getCookieString() || undefined,
     };
   } catch (err) {
     return { success: false, error: (err as Error).message };

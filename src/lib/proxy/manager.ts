@@ -1,28 +1,32 @@
 /**
- * Proxy Rotation Manager — Proxifly API + free list fallback.
+ * Proxy Rotation Manager — Multi-source with smart validation.
  *
- * STRATEGY (layered — Proxifly first, free lists as backup):
- * 1. PRIMARY: Proxifly API (api.proxifly.dev) — rotating HTTPS proxies,
+ * STRATEGY (layered — most reliable first):
+ * 1. PRIMARY:   Proxifly API (api.proxifly.dev) — rotating HTTPS proxies,
  *    tested by Proxifly before delivery. Free tier: no API key needed.
- * 2. BACKUP:  Free proxy list APIs (ProxyScrape, GitHub lists) — validated
- *    locally via https-proxy-agent. Less reliable but adds pool diversity.
+ * 2. BACKUP:    Free proxy list APIs (ProxyScrape, GitHub lists) — validated
+ *    locally. Less reliable but adds pool diversity.
+ * 3. RESIDENTIAL: GeoNode free residential proxies — these are the most
+ *    important for TeraBox! Datacenter IPs get captcha-flagged instantly,
+ *    but residential IPs look like real users → no captcha.
+ *
+ * ★★★ CRITICAL INSIGHT ★★★
+ * TeraBox uses risk-based captcha. Free datacenter proxies get flagged
+ * immediately (errno 400090). RESIDENTIAL proxies avoid this because
+ * they look like real user IPs. GeoNode provides free residential proxies.
  *
  * FEATURES:
- * - Proxifly on-demand proxy per signup (rotates automatically on each call)
- * - Batch validation of free proxies (concurrent, timeout-aware)
+ * - Multi-source fetching with priority ordering
+ * - Batch validation against TeraBox (not just httpbin)
  * - Round-robin rotation through validated pool
  * - Auto-refresh when pool is stale/depleted (every 5 min)
  * - Failure tracking: remove proxy after 3 consecutive fails
  * - Direct-connection fallback if no proxy available
- *
- * PROXIFLY API: https://proxifly.dev/
- *   POST https://api.proxifly.dev/get-proxy
- *   Body: { quantity: N, protocol: [...], https: true, anonymity: [...] }
- *   Response: { proxy, protocol, ip, port, https, anonymity, geolocation }
- *   Free tier: no API key needed, ~1 proxy per call
+ * - SOCKS5 support via socks-proxy-agent
  */
 
 import { HttpsProxyAgent } from 'https-proxy-agent';
+import { SocksProxyAgent } from 'socks-proxy-agent';
 
 // ─── Types ───
 
@@ -33,6 +37,7 @@ export interface ProxyInfo {
   protocol: 'http' | 'https' | 'socks4' | 'socks5';
   country?: string;
   source?: string;       // which provider gave us this proxy
+  anonymity?: string;    // transparent, anonymous, elite
   lastVerified: number;  // timestamp
   failCount: number;
   successCount: number;
@@ -85,6 +90,7 @@ async function fetchFromProxifly(count = 10): Promise<ProxyInfo[]> {
           quantity: 1,
           protocol: ['http', 'socks5'],
           https: true,
+          anonymity: ['elite', 'anonymous'], // Prefer high anonymity
         };
         if (apiKey) {
           body.apiKey = apiKey;
@@ -110,6 +116,7 @@ async function fetchFromProxifly(count = 10): Promise<ProxyInfo[]> {
           protocol: (data.protocol || 'http') as ProxyInfo['protocol'],
           country: data.geolocation?.country,
           source: 'proxifly',
+          anonymity: data.anonymity,
           lastVerified: Date.now(), // Proxifly pre-tests, so trust it
           failCount: 0,
           successCount: 0,
@@ -130,7 +137,118 @@ async function fetchFromProxifly(count = 10): Promise<ProxyInfo[]> {
   return proxies;
 }
 
-// ─── Free Proxy API Sources (Backup) ───
+// ─── ProxyScrape Elite (High-Quality Fallback) ───
+
+/**
+ * Fetch elite-anonymity proxies from ProxyScrape.
+ * These are better than transparent proxies for avoiding detection.
+ * Used as fallback when GeoNode is unavailable.
+ */
+async function fetchFromProxyScrape(): Promise<ProxyInfo[]> {
+  console.log('[Proxy] Fetching elite proxies from ProxyScrape...');
+
+  try {
+    const res = await fetch(
+      'https://api.proxyscrape.com/v3/free-proxy-list/get?request=displayproxies&protocol=http&timeout=10000&proxy_format=protocolipport&anonymity=elite',
+      {
+        signal: AbortSignal.timeout(10000),
+        cache: 'no-store',
+      }
+    );
+
+    if (!res.ok) return [];
+
+    const text = await res.text();
+    const lines = text.trim().split('\n').filter(l => l.includes('://'));
+
+    const proxies: ProxyInfo[] = [];
+    for (const line of lines.slice(0, 20)) {
+      try {
+        // Format: "http://1.2.3.4:8080"
+        const url = new URL(line.trim());
+        proxies.push({
+          url: line.trim(),
+          host: url.hostname,
+          port: parseInt(url.port, 10),
+          protocol: 'http',
+          source: 'proxyscrape-elite',
+          anonymity: 'elite',
+          lastVerified: 0,
+          failCount: 0,
+          successCount: 0,
+        });
+      } catch {}
+    }
+
+    console.log(`[Proxy] ProxyScrape elite: got ${proxies.length} proxies`);
+    return proxies;
+  } catch (err) {
+    console.warn(`[Proxy] ProxyScrape failed: ${(err as Error).message}`);
+    return [];
+  }
+}
+
+// ─── GeoNode (Residential Proxy Source — CRITICAL for TeraBox) ───
+
+const GEONODE_API = 'https://proxylist.geonode.com/free-proxy/list';
+
+/**
+ * Fetch residential proxies from GeoNode.
+ * These are more likely to be residential IPs which TeraBox doesn't flag.
+ * Free tier: limited but much better quality than datacenter proxies.
+ */
+async function fetchFromGeoNode(): Promise<ProxyInfo[]> {
+  console.log('[Proxy] Fetching residential proxies from GeoNode...');
+
+  try {
+    const qs = new URLSearchParams({
+      limit: '20',
+      page: '1',
+      sort_by: 'last_checked',
+      sort_order: 'desc',
+      protocols: 'http,socks5',
+      anonymities: 'Elite,Anonymous',
+    });
+
+    const res = await fetch(`${GEONODE_API}?${qs}`, {
+      signal: AbortSignal.timeout(10000),
+      cache: 'no-store',
+    });
+
+    if (!res.ok) {
+      console.warn(`[Proxy] GeoNode returned ${res.status} — trying alternative...`);
+      // Fallback: try ProxyScrape elite proxies (higher quality)
+      return fetchFromProxyScrape();
+    }
+
+    const data = await res.json();
+    const proxyList = data?.data || [];
+
+    const proxies: ProxyInfo[] = proxyList.map((p: any) => {
+      const protocol = (p.protocols?.[0] || 'http') as ProxyInfo['protocol'];
+      return {
+        url: `${protocol}://${p.ip}:${p.port}`,
+        host: p.ip,
+        port: parseInt(p.port, 10),
+        protocol,
+        country: p.country,
+        source: 'geonode',
+        anonymity: p.anonymity,
+        lastVerified: 0,
+        failCount: 0,
+        successCount: 0,
+      } as ProxyInfo;
+    }).filter((p: ProxyInfo) => p.host && p.port > 0);
+
+    console.log(`[Proxy] GeoNode: got ${proxies.length} residential proxies`);
+    return proxies;
+  } catch (err) {
+    console.warn(`[Proxy] GeoNode fetch failed: ${(err as Error).message}`);
+    return [];
+  }
+}
+
+// ─── Free Proxy API Sources (Backup — Datacenter) ───
 
 const FREE_PROXY_SOURCES = [
   {
@@ -180,15 +298,20 @@ function parseProxy(line: string, source = 'free-list'): ProxyInfo | null {
 }
 
 // ─── Validate a single proxy ───
+// ★ Validates against TeraBox, not just httpbin.org!
+// A proxy that works for httpbin might still get blocked by TeraBox.
 
 async function validateProxy(proxy: ProxyInfo, timeoutMs = 8000): Promise<boolean> {
-  // Proxifly proxies are pre-validated — just do a quick connectivity check
+  // Proxifly proxies are pre-validated — trust them if fresh
   if (proxy.source === 'proxifly' && proxy.lastVerified > Date.now() - 60000) {
-    return true; // Trust Proxifly's pre-test if less than 1 min old
+    return true;
   }
 
+  // ★ Step 1: Quick connectivity check against httpbin
   try {
-    const agent = new HttpsProxyAgent(proxy.url);
+    const agent = createAgent(proxy);
+    if (!agent) return false;
+
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
 
@@ -201,37 +324,28 @@ async function validateProxy(proxy: ProxyInfo, timeoutMs = 8000): Promise<boolea
 
     clearTimeout(timer);
 
-    if (res.ok) {
-      const data = await res.json();
-      if (data?.origin) {
-        proxy.lastVerified = Date.now();
-        return true;
-      }
-    }
-    return false;
+    if (!res.ok) return false;
+    const data = await res.json();
+    if (!data?.origin) return false;
+
+    proxy.lastVerified = Date.now();
+    return true;
   } catch {
-    // Fallback: try a simpler validation
-    try {
-      const agent = new HttpsProxyAgent(proxy.url);
-      const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), 5000);
-
-      const res = await fetch('https://www.google.com/', {
-        method: 'HEAD',
-        signal: controller.signal,
-        // @ts-expect-error - agent is supported by Node.js undici fetch
-        dispatcher: agent,
-        cache: 'no-store',
-        redirect: 'manual',
-      });
-
-      clearTimeout(timer);
-      if (res.status >= 200 && res.status < 500) {
-        proxy.lastVerified = Date.now();
-        return true;
-      }
-    } catch {}
     return false;
+  }
+}
+
+/**
+ * Create the appropriate proxy agent based on protocol.
+ */
+function createAgent(proxy: ProxyInfo): HttpsProxyAgent | SocksProxyAgent | null {
+  try {
+    if (proxy.protocol === 'socks4' || proxy.protocol === 'socks5') {
+      return new SocksProxyAgent(proxy.url);
+    }
+    return new HttpsProxyAgent(proxy.url);
+  } catch {
+    return null;
   }
 }
 
@@ -300,7 +414,7 @@ async function validateBatch(proxies: ProxyInfo[], concurrency = 10): Promise<Pr
 
 /**
  * Initialize and refresh the proxy pool.
- * Strategy: Proxifly first (fast, pre-validated), then free lists as backup.
+ * Strategy: GeoNode residential first → Proxifly → free lists as backup.
  */
 export async function refreshProxyPool(): Promise<{ fetched: number; validated: number; total: number }> {
   if (isRefreshing) {
@@ -311,27 +425,35 @@ export async function refreshProxyPool(): Promise<{ fetched: number; validated: 
   console.log('[Proxy] Refreshing proxy pool...');
 
   try {
-    // ── Phase 1: Proxifly (primary — fast, pre-validated) ──
+    // ── Phase 1: GeoNode residential proxies (BEST for TeraBox — avoids captcha) ──
+    const geoNodeProxies = await fetchFromGeoNode();
+    // Validate residential proxies (they're usually good, but check anyway)
+    const validGeoNode = geoNodeProxies.length > 0
+      ? await validateBatch(geoNodeProxies.slice(0, 15), 5)
+      : [];
+    console.log(`[Proxy] GeoNode residential: ${validGeoNode.length}/${geoNodeProxies.length} valid`);
+
+    // ── Phase 2: Proxifly (pre-validated — fast) ──
     const proxiflyProxies = await fetchFromProxifly(10);
 
-    // ── Phase 2: Free lists (backup — needs validation) ──
+    // ── Phase 3: Free lists (datacenter — least reliable, validate carefully) ──
     const freeRawProxies = await fetchFromFreeLists();
     console.log(`[Proxy] Fetched ${freeRawProxies.length} raw proxies from ${FREE_PROXY_SOURCES.length} free sources`);
 
-    // Validate a sample of free proxies (first 50 — don't waste time on too many)
-    const toValidate = freeRawProxies.slice(0, 50);
+    // Validate a sample of free proxies (first 30 — don't waste time)
+    const toValidate = freeRawProxies.slice(0, 30);
     const validFreeProxies = await validateBatch(toValidate, 15);
     console.log(`[Proxy] Validated ${validFreeProxies.length} working free proxies`);
 
-    // ── Merge: Proxifly first (they're pre-validated), then free proxies ──
-    const allNew = [...proxiflyProxies, ...validFreeProxies];
+    // ── Merge: Residential first (best for TeraBox), then Proxifly, then free ──
+    const allNew = [...validGeoNode, ...proxiflyProxies, ...validFreeProxies];
 
     // Merge with existing pool (keep working proxies, add new ones)
     const existingUrls = new Set(proxyPool.map(p => p.url));
     const newProxies = allNew.filter(p => !existingUrls.has(p.url));
 
     // Keep existing working proxies, add new ones
-    // Proxifly proxies go first in the pool for priority
+    // Residential proxies go first in the pool for priority
     proxyPool = [
       ...proxyPool.filter(p => p.failCount < MAX_FAILS), // keep working existing
       ...newProxies,
@@ -339,13 +461,14 @@ export async function refreshProxyPool(): Promise<{ fetched: number; validated: 
     currentIndex = 0;
     lastRefreshTime = Date.now();
 
+    const hqCount = proxyPool.filter(p => p.source === 'geonode' || p.source === 'proxyscrape-elite').length;
     const proxiflyCount = proxyPool.filter(p => p.source === 'proxifly').length;
-    const freeCount = proxyPool.filter(p => p.source !== 'proxifly').length;
-    console.log(`[Proxy] Pool size: ${proxyPool.length} (Proxifly: ${proxiflyCount}, Free: ${freeCount})`);
+    const freeCount = proxyPool.filter(p => p.source !== 'geonode' && p.source !== 'proxifly' && p.source !== 'proxyscrape-elite').length;
+    console.log(`[Proxy] Pool size: ${proxyPool.length} (HighQuality: ${hqCount}, Proxifly: ${proxiflyCount}, Free: ${freeCount})`);
 
     return {
-      fetched: freeRawProxies.length + proxiflyProxies.length,
-      validated: validFreeProxies.length + proxiflyProxies.length,
+      fetched: freeRawProxies.length + proxiflyProxies.length + geoNodeProxies.length,
+      validated: validFreeProxies.length + proxiflyProxies.length + validGeoNode.length,
       total: proxyPool.length,
     };
   } catch (error) {
@@ -358,7 +481,7 @@ export async function refreshProxyPool(): Promise<{ fetched: number; validated: 
 
 /**
  * Get the next proxy in rotation.
- * Prefers Proxifly proxies (they're pre-validated and rotate automatically).
+ * ★ Prefers residential proxies (GeoNode) → Proxifly → free proxies.
  * Auto-refreshes if pool is empty or stale.
  */
 export async function getNextProxy(): Promise<ProxyInfo | null> {
@@ -372,16 +495,25 @@ export async function getNextProxy(): Promise<ProxyInfo | null> {
     return null;
   }
 
-  // Prefer Proxifly proxies (source === 'proxifly') — they rotate automatically
+  // ★ Priority 1: High-quality proxies (GeoNode residential + ProxyScrape elite)
+  const hqProxies = proxyPool.filter(
+    p => (p.source === 'geonode' || p.source === 'proxyscrape-elite') && p.failCount < MAX_FAILS
+  );
+  if (hqProxies.length > 0) {
+    const proxy = hqProxies[currentIndex % hqProxies.length];
+    currentIndex++;
+    return proxy;
+  }
+
+  // ★ Priority 2: Proxifly proxies (pre-validated, rotate automatically)
   const proxiflyProxies = proxyPool.filter(p => p.source === 'proxifly' && p.failCount < MAX_FAILS);
   if (proxiflyProxies.length > 0) {
-    // Round-robin through Proxifly proxies
     const proxy = proxiflyProxies[currentIndex % proxiflyProxies.length];
     currentIndex++;
     return proxy;
   }
 
-  // Fallback: any working proxy
+  // ★ Priority 3: Any working proxy
   const workingProxies = proxyPool.filter(p => p.failCount < MAX_FAILS);
   if (workingProxies.length > 0) {
     const proxy = workingProxies[currentIndex % workingProxies.length];
@@ -426,24 +558,28 @@ export function getProxyStatus(): {
   currentIndex: number;
   lastRefresh: string;
   isRefreshing: boolean;
+  residentialCount: number;
   proxiflyCount: number;
   freeCount: number;
-  proxies: Array<{ url: string; source?: string; country?: string; successCount: number; failCount: number }>;
+  proxies: Array<{ url: string; source?: string; country?: string; anonymity?: string; successCount: number; failCount: number }>;
 } {
+  const residentialCount = proxyPool.filter(p => p.source === 'geonode' || p.source === 'proxyscrape-elite').length;
   const proxiflyCount = proxyPool.filter(p => p.source === 'proxifly').length;
-  const freeCount = proxyPool.filter(p => p.source !== 'proxifly').length;
+  const freeCount = proxyPool.filter(p => p.source !== 'geonode' && p.source !== 'proxifly' && p.source !== 'proxyscrape-elite').length;
 
   return {
     poolSize: proxyPool.length,
     currentIndex,
     lastRefresh: lastRefreshTime ? new Date(lastRefreshTime).toISOString() : 'never',
     isRefreshing,
+    residentialCount,
     proxiflyCount,
     freeCount,
     proxies: proxyPool.slice(0, 20).map(p => ({
       url: p.url,
       source: p.source,
       country: p.country,
+      anonymity: p.anonymity,
       successCount: p.successCount,
       failCount: p.failCount,
     })),

@@ -64,6 +64,7 @@ import {
   extractSurlFromLink,
   visitShareLink,
   setProxyUrl as setTeraboxProxyUrl,
+  clearCookies as clearTeraboxCookies,
 } from '@/lib/terabox/api';
 import type { ProxyInfo } from '@/lib/proxy';
 import { isCaptchaConfigured, solveRecaptcha } from '@/lib/captcha';
@@ -196,6 +197,7 @@ async function executeApiSignup(
 
     // Step 2: Send verification code
     steps.push('Sending verification code to email...');
+    await naturalDelay(300, 1000); // Small delay before sending code — looks organic
     const encryptedEmail = pubkey?.pubkey ? encryptEmail(email, pubkey.pubkey) : email;
     const isEncrypted = encryptedEmail !== email;
 
@@ -213,11 +215,14 @@ async function executeApiSignup(
 
         for (let captchaAttempt = 0; captchaAttempt < MAX_CAPTCHA_RETRIES; captchaAttempt++) {
           steps.push(`Captcha solve attempt ${captchaAttempt + 1}/${MAX_CAPTCHA_RETRIES}...`);
-          const captchaToken = await solveCaptchaForSignup(siteKey, referralLink);
+          // ★ Pass proxy URL so CaptchaSolv uses *Task (with proxy) type
+          // This makes the captcha token bound to the proxy IP → TeraBox accepts it!
+          const captchaToken = await solveCaptchaForSignup(siteKey, referralLink, _proxy?.url);
 
           if (captchaToken) {
             gIdentity = captchaToken;
             steps.push(`Captcha solved (${captchaToken.substring(0, 10)}...) — retrying sendcode...`);
+            await naturalDelay(500, 1500); // Use token immediately but with natural timing
             sendResult = await sendVerificationCode(encryptedEmail, gIdentity, isEncrypted);
             steps.push(`sendcode retry: errno=${sendResult.errno}, ${sendResult.success ? 'OK' : sendResult.error}`);
 
@@ -325,18 +330,33 @@ function generateApiPassword(length = 14): string {
 
 // ─── Captcha Solving (CaptchaSolv — 100 free solves/day) ───
 
-async function solveCaptchaForSignup(siteKey: string, pageUrl: string): Promise<string | null> {
+/**
+ * Solve captcha for signup.
+ * ★★★ CRITICAL: proxyUrl MUST be passed!
+ * Enterprise reCAPTCHA binds token to solver IP.
+ * Without proxy, CaptchaSolv solves from their IP ≠ your proxy IP → token REJECTED.
+ * With proxy, CaptchaSolv solves from YOUR proxy IP → token accepted!
+ */
+async function solveCaptchaForSignup(siteKey: string, pageUrl: string, proxyUrl?: string): Promise<string | null> {
   if (!isCaptchaConfigured()) {
     console.warn('[Engine] No captcha solver configured. Set CAPTCHASOLV_API_KEY (100 free/day)');
     return null;
   }
   const startTime = Date.now();
-  const token = await solveRecaptcha(siteKey, pageUrl);
+  const token = await solveRecaptcha(siteKey, pageUrl, proxyUrl);
   if (token) {
     const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
-    console.log(`[Engine] Captcha solved in ${elapsed}s — token length: ${token.length}`);
+    console.log(`[Engine] Captcha solved in ${elapsed}s — token length: ${token.length}${proxyUrl ? ' (proxy-bound)' : ' (proxyless!)'}`);
   }
   return token;
+}
+
+// ─── Natural Delay (anti-fingerprinting) ───
+// Real users don't make API calls instantly. Small delays make requests look organic.
+
+function naturalDelay(minMs = 500, maxMs = 2000): Promise<void> {
+  const ms = minMs + Math.random() * (maxMs - minMs);
+  return new Promise(r => setTimeout(r, ms));
 }
 
 // ─── Core Workflow ───
@@ -356,7 +376,10 @@ export async function executeSignup(referralLink: string): Promise<SignupResult>
     },
   });
 
-  // ── Step 0: Get next proxy from rotation pool ──
+  // ── Step 0: Fresh session + get next proxy ──
+  // ★ Clear cookies for each signup attempt — fresh session = clean risk score
+  clearTeraboxCookies();
+
   let proxy: ProxyInfo | null = null;
   try {
     proxy = await getNextProxy();
@@ -398,12 +421,17 @@ export async function executeSignup(referralLink: string): Promise<SignupResult>
     // ── Step 1.5: Visit share link FIRST to set referral tracking cookies ──
     // This is CRITICAL — the referral must be tracked BEFORE the signup,
     // so TeraBox attributes the new account to the referrer.
+    // ★ Cookies from this visit are now stored in the session jar and will be
+    //   sent with ALL subsequent TeraBox API calls → session continuity!
     try {
       const visitResult = await visitShareLink(referralLink);
       await log('info', `Share link visited (referral tracking): ${visitResult.success ? 'OK' : visitResult.error}`, signup.id);
     } catch (visitErr) {
       await log('warn', `Share link visit failed: ${(visitErr as Error).message}`, signup.id);
     }
+
+    // ★ Natural delay — real users don't instantly hit the signup API after visiting a page
+    await naturalDelay(1000, 3000);
 
     // ── Step 2: Try API-first signup (TeraBox Passport API) ──
     // Always try API first — sendcode sometimes works without captcha.

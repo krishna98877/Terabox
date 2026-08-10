@@ -475,14 +475,6 @@ export async function solveRecaptchaV2(
  * Required: websiteURL, websiteKey
  * Detection: script src uses enterprise.js instead of api.js
  *
-/**
- * Solve reCAPTCHA v2 Enterprise via CaptchaSolv.
- * ★ TeraBox uses Enterprise reCAPTCHA (errno 460030) — this is the correct type!
- *
- * Per docs: RecaptchaV2EnterpriseTaskProxyless / RecaptchaV2EnterpriseInvisibleTaskProxyless
- * Required: websiteURL, websiteKey
- * Detection: script src uses enterprise.js instead of api.js
- *
  * ★ Uses ASYNC polling (createTask → getTaskResult) because Enterprise v2
  *   can take 40-75s and the sync /solve endpoint may 504 via Cloudflare.
  *   Async avoids the gateway timeout issue.
@@ -523,10 +515,6 @@ export async function solveRecaptchaV2Enterprise(
  * Solve reCAPTCHA v3 via CaptchaSolv.
  * Per docs: RecaptchaV3TaskProxyless
  * Required: websiteURL, websiteKey
-/**
- * Solve reCAPTCHA v3 via CaptchaSolv.
- * Per docs: RecaptchaV3TaskProxyless
- * Required: websiteURL, websiteKey
  * Optional: pageAction (string, e.g. "login"), score ("normal" or "high")
  *
  * ★ When proxy is provided, uses RecaptchaV3Task (with proxy) for IP binding.
@@ -560,10 +548,6 @@ export async function solveRecaptchaV3(
   return solveWithRetry(key, task, 'reCAPTCHA v3');
 }
 
-/**
- * Solve reCAPTCHA v3 Enterprise via CaptchaSolv.
- * Per docs: RecaptchaV3EnterpriseTaskProxyless
- * Same params as v3: websiteURL, websiteKey, pageAction, score
 /**
  * Solve reCAPTCHA v3 Enterprise via CaptchaSolv.
  * Per docs: RecaptchaV3EnterpriseTaskProxyless
