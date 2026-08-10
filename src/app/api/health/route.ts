@@ -79,15 +79,22 @@ export async function GET() {
       captcha: {
         configured: captchaConfigured,
         activeProvider: captchaProvider,
+        nopecha: {
+          configured: !!process.env.NOPECHA_API_KEY,
+          freeTier: '100 solves/day (daily reset)',
+          priority: 1,
+        },
         noCaptchaAi: {
           configured: !!process.env.NOCAPTCHA_API_KEY,
-          freeTier: '6000 solves/month',
+          freeTier: '6000 solves (one-time)',
+          priority: 2,
         },
         twoCaptcha: {
           configured: !!process.env.TWOCAPTCHA_API_KEY,
+          priority: 3,
         },
         balance: captchaBalance?.balance,
-        supportedTypes: ['reCAPTCHA v2', 'reCAPTCHA v3', 'Turnstile', 'Image CAPTCHA'],
+        supportedTypes: ['reCAPTCHA v2', 'reCAPTCHA v3', 'hCaptcha', 'Turnstile', 'Image CAPTCHA'],
       },
       stats: {
         totalSignups,

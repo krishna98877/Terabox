@@ -1,19 +1,22 @@
 /**
- * CAPTCHA Solver Module — NoCaptchaAI (primary) + 2Captcha (fallback).
+ * CAPTCHA Solver Module — NopeCHA (primary) + NoCaptchaAI + 2Captcha (fallback).
  *
- * NoCaptchaAI: 6,000 FREE solves/month. Cheapest paid option.
- *   - reCAPTCHA v2/v3, Turnstile, GeeTest, ImageToText, and more
- *   - Same createTask/getTaskResult API format as 2captcha
+ * NopeCHA: 100 FREE solves/DAY (daily reset — never runs out!)
+ *   - reCAPTCHA v2/v3, hCaptcha, GeeTest, FunCAPTCHA, Text CAPTCHA
+ *   - API: POST /v1/recaptcha → GET /v1/recaptcha (simple submit/poll)
+ *   - Set NOPECHA_API_KEY env var
+ *
+ * NoCaptchaAI: 6,000 FREE solves (one-time, no reset).
+ *   - reCAPTCHA v2/v3, Turnstile, GeeTest, ImageToText
  *   - Set NOCAPTCHA_API_KEY env var
  *
- * 2Captcha: Fallback if NoCaptchaAI not configured or fails.
- *   - reCAPTCHA v2/v3, Turnstile, ImageToText
- *   - Paid only (~$1-3/1000 solves)
+ * 2Captcha: Paid fallback (~$1-3/1000 solves).
  *   - Set TWOCAPTCHA_API_KEY env var
  *
- * Priority: NoCaptchaAI → 2captcha → null (no solver available)
+ * Priority: NopeCHA → NoCaptchaAI → 2captcha → null
  */
 
+import { solveRecaptchaV2 as nopechaSolveV2, solveRecaptchaV3 as nopechaSolveV3, isConfigured as isNopechaConfigured, getBalance as nopechaGetBalance } from './nopecha';
 import { solveRecaptchaV2 as noCaptchaSolveV2, solveRecaptchaV3 as noCaptchaSolveV3, solveTurnstile as noCaptchaSolveTurnstile, solveImageCaptcha as noCaptchaSolveImage, isConfigured as isNoCaptchaConfigured, getBalance as noCaptchaGetBalance } from './nocaptchaai';
 import { solveRecaptchaV2 as twoCaptchaSolveV2, solveRecaptchaV3 as twoCaptchaSolveV3, solveTurnstile as twoCaptchaSolveTurnstile, solveImageCaptcha as twoCaptchaSolveImage, isConfigured as is2CaptchaInternalConfigured, getBalance as twoCaptchaGetBalance } from './twocaptcha';
 
@@ -38,10 +41,11 @@ export interface SolveResult {
 // ─── Provider Detection ───
 
 export function isCaptchaConfigured(): boolean {
-  return isNoCaptchaConfigured() || is2CaptchaInternalConfigured();
+  return isNopechaConfigured() || isNoCaptchaConfigured() || is2CaptchaInternalConfigured();
 }
 
-export function getActiveProvider(): 'nocaptchaai' | '2captcha' | null {
+export function getActiveProvider(): 'nopecha' | 'nocaptchaai' | '2captcha' | null {
+  if (isNopechaConfigured()) return 'nopecha';
   if (isNoCaptchaConfigured()) return 'nocaptchaai';
   if (is2CaptchaInternalConfigured()) return '2captcha';
   return null;
@@ -54,7 +58,14 @@ export async function solveRecaptchaV2(
   pageUrl: string,
   invisible = false
 ): Promise<SolveResult> {
-  // Try NoCaptchaAI first (free tier)
+  // Try NopeCHA first (100/day free, daily reset)
+  if (isNopechaConfigured()) {
+    const result = await nopechaSolveV2(siteKey, pageUrl, invisible);
+    if (result.success) return { ...result, provider: 'nopecha' };
+    console.warn(`[Captcha] NopeCHA v2 failed: ${result.error} — trying next provider`);
+  }
+
+  // Try NoCaptchaAI (6k free one-time)
   if (isNoCaptchaConfigured()) {
     const result = await noCaptchaSolveV2(siteKey, pageUrl, invisible);
     if (result.success) return { ...result, provider: 'nocaptchaai' };
@@ -78,6 +89,12 @@ export async function solveRecaptchaV3(
   minScore = 0.3,
   action = ''
 ): Promise<SolveResult> {
+  if (isNopechaConfigured()) {
+    const result = await nopechaSolveV3(siteKey, pageUrl, minScore, action);
+    if (result.success) return { ...result, provider: 'nopecha' };
+    console.warn(`[Captcha] NopeCHA v3 failed: ${result.error} — trying next provider`);
+  }
+
   if (isNoCaptchaConfigured()) {
     const result = await noCaptchaSolveV3(siteKey, pageUrl, minScore, action);
     if (result.success) return { ...result, provider: 'nocaptchaai' };
@@ -98,6 +115,7 @@ export async function solveTurnstile(
   siteKey: string,
   pageUrl: string
 ): Promise<SolveResult> {
+  // NopeCHA doesn't support Turnstile natively — skip to NoCaptchaAI
   if (isNoCaptchaConfigured()) {
     const result = await noCaptchaSolveTurnstile(siteKey, pageUrl);
     if (result.success) return { ...result, provider: 'nocaptchaai' };
@@ -134,6 +152,10 @@ export async function solveImageCaptcha(
 
 export async function getBalance(): Promise<{ balance: number; error?: string; provider?: string }> {
   const provider = getActiveProvider();
+  if (provider === 'nopecha') {
+    const result = await nopechaGetBalance();
+    return { ...result, provider: 'nopecha' };
+  }
   if (provider === 'nocaptchaai') {
     const result = await noCaptchaGetBalance();
     return { ...result, provider: 'nocaptchaai' };
@@ -149,7 +171,7 @@ export async function getBalance(): Promise<{ balance: number; error?: string; p
 
 export async function solveRecaptcha(siteKey: string, pageUrl: string): Promise<string | null> {
   if (!isCaptchaConfigured()) {
-    console.warn('[Captcha] No provider configured (set NOCAPTCHA_API_KEY or TWOCAPTCHA_API_KEY)');
+    console.warn('[Captcha] No provider configured (set NOPECHA_API_KEY, NOCAPTCHA_API_KEY, or TWOCAPTCHA_API_KEY)');
     return null;
   }
 

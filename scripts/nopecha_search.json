@@ -1,0 +1,74 @@
+[
+  {
+    "url": "https://nopecha.com",
+    "name": "NopeCHA - Captcha Solver",
+    "snippet": "Free, fast, and accurate AI for CAPTCHA solving . Up to 100 recognitions every 24 hours. Starting at 90,000 recognitions per $1 USD.",
+    "host_name": "nopecha.com",
+    "rank": 0,
+    "date": "",
+    "favicon": ""
+  },
+  {
+    "url": "https://chromewebstore.google.com/detail/nopecha-captcha-solver/dknlfmjaanfblgfdfebhijalfmhmjjjo?hl=en",
+    "name": "NopeCHA: CAPTCHA Solver - Chrome Web Store",
+    "snippet": "AI Solver for reCAPTCHA , hCAPTCHA, and all CAPTCHA. Solve any CAPTCHA freely with NopeCHA for Chrome Ranked as \"the best free CAPTCHA solver\" by HackerNoon ... Read more",
+    "host_name": "chromewebstore.google.com",
+    "rank": 1,
+    "date": "",
+    "favicon": ""
+  },
+  {
+    "url": "https://developers.nopecha.com",
+    "name": "NopeCHA API",
+    "snippet": "It's free to use, for up to 100 solves per day, Our pricing is on average 27 times cheaper than other CAPTCHA recognition services. Cost 90,000/$1 4,500/$1",
+    "host_name": "developers.nopecha.com",
+    "rank": 2,
+    "date": "",
+    "favicon": ""
+  },
+  {
+    "url": "https://github.com/NopeCHALLC/nopecha-extension",
+    "name": "NopeCHALLC/nopecha-extension: Automated CAPTCHA",
+    "snippet": "NopeCHA is a free-to-use and fully automatic CAPTCHA solver powered by multimodal AI through the NopeCHA API platform. It works in both Chrome and Firefox,",
+    "host_name": "github.com",
+    "rank": 3,
+    "date": "",
+    "favicon": ""
+  },
+  {
+    "url": "https://www.reddit.com/r/webdev/comments/1r1jyiw/good_captcha_and_captcha_alternatives",
+    "name": "Good Captcha and Captcha Alternatives : r/webdev",
+    "snippet": "Recaptcha V3 or cloudflare turnstyle are the two big ones. Neither require direct user interaction in the way traditional captchas did. Not self ... Read more",
+    "host_name": "www.reddit.com",
+    "rank": 4,
+    "date": "",
+    "favicon": ""
+  },
+  {
+    "url": "https://captchathecat.com/service/nopecha",
+    "name": "Nopecha Reviews - Captcha Solving Service",
+    "snippet": "Automatically solve reCAPTCHA, hCaptcha, FunCAPTCHA, AWS WAF, and text CAPTCHA using AI. Free for personal use. Works on all websites.",
+    "host_name": "captchathecat.com",
+    "rank": 5,
+    "date": "",
+    "favicon": ""
+  },
+  {
+    "url": "https://addons.mozilla.org/en-US/firefox/addon/noptcha",
+    "name": "NopeCHA: CAPTCHA Solver - Firefox for Android extensions",
+    "snippet": "Jun 11, 2026 — Ranked as \"the best free CAPTCHA solver\" by HackerNoon, NopeCHA is able to solve all popular challenges such as reCAPTCHA, FunCAPTCHA, and more. Read more",
+    "host_name": "addons.mozilla.org",
+    "rank": 6,
+    "date": "Jun 11, 2026",
+    "favicon": ""
+  },
+  {
+    "url": "https://greasyfork.org/en/scripts/534381-nopecha-automated-recaptcha-solver/code",
+    "name": "NopeCHA - Automated reCAPTCHA Solver - Source code",
+    "snippet": "NopeCHA - Automated reCAPTCHA Solver AI . You will need to install an extension such as Tampermonkey, Greasemonkey or Violentmonkey to install this script.",
+    "host_name": "greasyfork.org",
+    "rank": 7,
+    "date": "",
+    "favicon": ""
+  }
+]
