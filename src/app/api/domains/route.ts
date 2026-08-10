@@ -1,13 +1,13 @@
 import { NextResponse } from 'next/server';
-import { getDomains } from '@/lib/mailtm';
+import { getDomains } from '@/lib/catchmail';
 
-// GET /api/domains — Available mail.tm domains
+// GET /api/domains — Available catchmail.io domains
 export const dynamic = 'force-dynamic';
 
 export async function GET() {
   try {
     const domains = await getDomains();
-    console.log('[API /domains] Found domains:', domains.length, domains.map(d => d.domain));
+    console.log('[API /domains] Domains:', domains);
     return NextResponse.json({ domains });
   } catch (error) {
     console.error('[API /domains] Error:', (error as Error).message);

@@ -15,7 +15,7 @@ const geistMono = Geist_Mono({
 
 export const metadata: Metadata = {
   title: "TeraBox Referral Agent",
-  description: "Automated TeraBox referral signup & verification dashboard powered by Mail.tm + Groq AI",
+  description: "Automated TeraBox referral signup & verification dashboard powered by CatchMail.io + Groq AI",
 };
 
 export default function RootLayout({

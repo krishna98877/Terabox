@@ -15,7 +15,7 @@
 
 const BASE_URL = 'https://api.catchmail.io';
 const DEFAULT_DOMAIN = 'catchmail.io';
-const TIMEOUT = 20000;
+const TIMEOUT = 25000;
 
 // ─── Types ───
 
@@ -41,14 +41,14 @@ export interface CatchMailMessageDetail extends CatchMailMessageSummary {
     contentType: string;
     size: number;
   }>;
-  security: {
+  security?: {
     verified: boolean;
     verification_level: string;
     dkim: { status: string | null; has_signature: boolean };
     spf: { status: string | null };
     dmarc: { status: string | null };
   };
-  security_badge: {
+  security_badge?: {
     label: string;
     color: string;
     icon: string;
@@ -63,20 +63,17 @@ export interface CatchMailInbox {
   count: number;
 }
 
-// ─── Rate Limiter (10 QPS to be safe) ───
+// ─── Rate Limiter (1 QPS for safety — catchmail.io limits 1/s per IP) ───
 
-let lastRequestTimes: number[] = [];
-const QPS_LIMIT = 10;
+let lastRequestTime = 0;
 
 async function enforceRateLimit(): Promise<void> {
   const now = Date.now();
-  lastRequestTimes = lastRequestTimes.filter(t => now - t < 1000);
-  if (lastRequestTimes.length >= QPS_LIMIT) {
-    const oldest = lastRequestTimes[0];
-    const waitMs = 1000 - (now - oldest) + 50;
-    if (waitMs > 0) await new Promise(r => setTimeout(r, waitMs));
+  const elapsed = now - lastRequestTime;
+  if (elapsed < 1100) {
+    await new Promise(r => setTimeout(r, 1100 - elapsed));
   }
-  lastRequestTimes.push(Date.now());
+  lastRequestTime = Date.now();
 }
 
 // ─── Core API Request ───
@@ -174,7 +171,7 @@ export async function createTempEmail(): Promise<{
   address: string;
   accountId: string;
   token: string;  // not used but kept for engine.ts compatibility
-  password: string;  // not used but kept" kept for engine.ts compatibility
+  password: string;  // not used but kept for engine.ts compatibility
 }> {
   // Generate random username (14 chars for uniqueness)
   const username = Array.from({ length: 14 }, () =>
@@ -208,34 +205,71 @@ export async function getDomains(): Promise<string[]> {
 }
 
 /**
+ * Check if a message looks like a TeraBox verification email.
+ */
+function isTeraBoxVerificationMessage(msg: CatchMailMessageSummary): boolean {
+  const subject = (msg.subject || '').toLowerCase();
+  const from = (msg.from || '').toLowerCase();
+
+  // TeraBox verification patterns
+  if (subject.includes('verification') || subject.includes('verify')) return true;
+  if (subject.includes('code') && (from.includes('terabox') || from.includes('1024terabox'))) return true;
+  if (from.includes('terabox') || from.includes('1024terabox') || from.includes('terabox.com')) return true;
+  if (subject.includes('confirm') || subject.includes('activate')) return true;
+
+  return false;
+}
+
+/**
  * Poll a mailbox for new messages.
  * Returns the first new message found, or null if timeout.
  *
+ * IMPROVEMENTS over original:
+ * - Proper 1 QPS rate limiting (catchmail.io enforces this)
+ * - TeraBox-specific message detection (prioritize verification emails)
+ * - Faster initial polls (1.5s for first 10 attempts)
+ * - More detailed logging
+ * - Better error recovery
+ *
  * @param address - The full email address to poll
- * @param maxAttempts - Maximum number of poll attempts
- * @param intervalMs - Base interval between polls (ms)
+ * @param maxAttempts - Maximum number of poll attempts (default 60)
+ * @param intervalMs - Base interval between polls (ms, default 3000)
  * @param sinceDate - Only return messages newer than this date
  */
 export async function pollForMessages(
   address: string,
-  maxAttempts = 50,
-  intervalMs = 4000,
+  maxAttempts = 60,
+  intervalMs = 3000,
   sinceDate?: Date
 ): Promise<CatchMailMessageDetail | null> {
-  const cutoff = sinceDate || new Date(Date.now() - 60000); // default: 1 min ago
+  const cutoff = sinceDate || new Date(Date.now() - 120000); // default: 2 min ago
+  const startTime = Date.now();
 
   console.log(`[CatchMail] Polling ${address} for messages (max ${maxAttempts} attempts, cutoff ${cutoff.toISOString()})`);
 
+  let consecutiveErrors = 0;
+
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
-    // Faster polling initially (2s for first 15), then slow down
-    const waitMs = attempt < 15 ? 2000 : intervalMs;
+    // Adaptive polling: fast initially, then slow down
+    // First 10 attempts: 1.5s (respecting 1 QPS API limit)
+    // Next 20: 3s
+    // After that: intervalMs
+    let waitMs: number;
+    if (attempt < 10) {
+      waitMs = 1500;
+    } else if (attempt < 30) {
+      waitMs = 3000;
+    } else {
+      waitMs = intervalMs;
+    }
     await new Promise(r => setTimeout(r, waitMs));
 
     try {
       const inbox = await listMessages(address);
+      consecutiveErrors = 0; // reset on success
 
       if (inbox.messages.length > 0) {
-        // Find the most recent message that's newer than our cutoff
+        // Filter for messages newer than our cutoff
         const recentMessages = inbox.messages.filter(m => {
           try {
             return new Date(m.date) >= cutoff;
@@ -245,26 +279,55 @@ export async function pollForMessages(
         });
 
         if (recentMessages.length > 0) {
-          // Get the latest message's full details
-          const latest = recentMessages[recentMessages.length - 1];
+          // Prioritize TeraBox verification emails
+          const teraboxMessages = recentMessages.filter(isTeraBoxVerificationMessage);
+          const targetMessages = teraboxMessages.length > 0 ? teraboxMessages : recentMessages;
+
+          // Sort by date descending (newest first)
+          targetMessages.sort((a, b) => {
+            try {
+              return new Date(b.date).getTime() - new Date(a.date).getTime();
+            } catch {
+              return 0;
+            }
+          });
+
+          const latest = targetMessages[0];
           const detail = await getMessage(latest.id, address);
 
-          console.log(`[CatchMail] Message received on attempt ${attempt + 1}: "${detail.subject}" from ${detail.from}`);
+          const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
+          console.log(`[CatchMail] Message received on attempt ${attempt + 1} (${elapsed}s): "${detail.subject}" from ${detail.from}`);
+          console.log(`[CatchMail] Body text preview: ${(detail.body?.text || '').substring(0, 200)}`);
           return detail;
         }
       }
 
-      // Log every 10th attempt
-      if ((attempt + 1) % 10 === 0) {
-        console.log(`[CatchMail] Attempt ${attempt + 1}/${maxAttempts} — no new messages for ${address} (${inbox.count} total)`);
+      // Log progress
+      const attemptNum = attempt + 1;
+      if (attemptNum <= 5 || attemptNum % 5 === 0) {
+        const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
+        console.log(`[CatchMail] Attempt ${attemptNum}/${maxAttempts} (${elapsed}s) — no new messages for ${address} (${inbox.count} total in inbox)`);
       }
     } catch (error) {
-      console.error(`[CatchMail] Poll attempt ${attempt + 1} failed: ${(error as Error).message}`);
-      // Don't abort on poll failure — retry next attempt
-      // But if it's a 404, the mailbox might not exist yet (shouldn't happen with CatchMail)
+      consecutiveErrors++;
+      const errMsg = (error as Error).message;
+      console.error(`[CatchMail] Poll attempt ${attempt + 1} failed (consecutive: ${consecutiveErrors}): ${errMsg}`);
+
+      // If rate limited (429), wait longer
+      if (errMsg.includes('429') || errMsg.includes('rate')) {
+        console.log('[CatchMail] Rate limited — waiting 5s before retry');
+        await new Promise(r => setTimeout(r, 5000));
+      }
+
+      // If too many consecutive errors, abort
+      if (consecutiveErrors >= 10) {
+        console.error(`[CatchMail] Too many consecutive errors (${consecutiveErrors}) — aborting poll`);
+        return null;
+      }
     }
   }
 
-  console.log(`[CatchMail] Polling timed out after ${maxAttempts} attempts for ${address}`);
+  const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
+  console.log(`[CatchMail] Polling timed out after ${maxAttempts} attempts (${elapsed}s) for ${address}`);
   return null;
 }

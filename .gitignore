@@ -73,3 +73,4 @@ dev.log
 /temp-mail-*.json
 /mailtm-*.json
 /components.json
+catchmail_docs.json
