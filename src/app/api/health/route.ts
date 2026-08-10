@@ -63,6 +63,12 @@ export async function GET() {
         autoSignup: config?.autoSignup ?? false,
         maxSignupsPerDay: config?.maxSignupsPerDay ?? 50,
       },
+      email: {
+        provider: 'CatchMail.io',
+        domain: 'catchmail.io',
+        requiresAuth: false,
+        requiresAccountCreation: false,
+      },
       stats: {
         totalSignups,
       },

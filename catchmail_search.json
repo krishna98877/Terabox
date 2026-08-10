@@ -1,0 +1,83 @@
+[
+  {
+    "url": "https://catchmail.io/docs",
+    "name": "Free Email API Documentation",
+    "snippet": "Complete REST API documentation for Catchmail . Learn how to integrate disposable email into your application. Endpoints for listing messages, reading emails ...",
+    "host_name": "catchmail.io",
+    "rank": 0,
+    "date": "",
+    "favicon": ""
+  },
+  {
+    "url": "https://catchmail.io",
+    "name": "Catchmail - Free Disposable Email API | Custom Domain",
+    "snippet": "Free disposable email API for developers . Create temporary email addresses instantly. List messages in a mailbox. List mailbox messages Read individual  ...",
+    "host_name": "catchmail.io",
+    "rank": 1,
+    "date": "",
+    "favicon": ""
+  },
+  {
+    "url": "https://docs.customer.io/messaging/send/transactional/email",
+    "name": "Set up a transactional email",
+    "snippet": "Jul 15, 2026 — Go to the Transactional page and click Send your first message or Create message —depending. We've exposed an API endpoint so you can manage ...",
+    "host_name": "docs.customer.io",
+    "rank": 2,
+    "date": "Jul 15, 2026",
+    "favicon": ""
+  },
+  {
+    "url": "https://www.unipile.com/read-email-api",
+    "name": "How to Read Emails via API: A Developer's Guide to Inbox",
+    "snippet": "A read email API exposes endpoints to authenticate against a user's mailbox (via OAuth 2.0 or IMAP credentials), list inbox messages , fetch full email bodies ... Read more",
+    "host_name": "www.unipile.com",
+    "rank": 3,
+    "date": "",
+    "favicon": ""
+  },
+  {
+    "url": "https://developer.nylas.com/docs/v3/email",
+    "name": "Email API | Docs",
+    "snippet": "Jun 15, 2026 — The Nylas Email API lets you read, send, search, and manage email messages , threads, folders, and attachments across Gmail, Microsoft 365, ...",
+    "host_name": "developer.nylas.com",
+    "rank": 4,
+    "date": "Jun 15, 2026",
+    "favicon": ""
+  },
+  {
+    "url": "https://developers.outreach.io/api/reference/mailing",
+    "name": "Mailing",
+    "snippet": "Outreach Public API is documented here, at the Development Portal, expand the link Outreach REST API Reference in the left navigation bar to see ... Read more",
+    "host_name": "developers.outreach.io",
+    "rank": 5,
+    "date": "",
+    "favicon": ""
+  },
+  {
+    "url": "https://www.mailslurp.com/docs/api",
+    "name": "MailSlurp API reference",
+    "snippet": "Create a new inbox and with a randomized email address to send and receive from. Pass emailAddress parameter if you wish to use a specific email address. Read more",
+    "host_name": "www.mailslurp.com",
+    "rank": 6,
+    "date": "",
+    "favicon": ""
+  },
+  {
+    "url": "https://docs.mailtrap.io/developers",
+    "name": "Overview | API Docs - Documentation | Mailtrap Help Center",
+    "snippet": "May 11, 2026 — Endpoints to send transactional and bulk (promotional) emails , as well as manage sending domains, suppressions, and delivery statistics. Read more",
+    "host_name": "docs.mailtrap.io",
+    "rank": 7,
+    "date": "May 11, 2026",
+    "favicon": ""
+  },
+  {
+    "url": "https://www.twilio.com/docs/sendgrid/api-reference",
+    "name": "SendGrid v3 API reference",
+    "snippet": "This API reference provides complete documentation for every endpoint and operation. For an overview of using SendGrid APIs , see the Getting Started section. Read more",
+    "host_name": "www.twilio.com",
+    "rank": 8,
+    "date": "",
+    "favicon": ""
+  }
+]

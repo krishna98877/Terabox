@@ -14,7 +14,13 @@
  * The email is RSA-encrypted using the pubkey from step 1.
  */
 
-const BASE_URL = 'https://www.1024terabox.com';
+// TeraBox has multiple domains — try them in order if one fails
+const BASE_URLS = [
+  'https://www.1024terabox.com',
+  'https://www.terabox.com',
+  'https://www.dubox.com',
+];
+let activeBaseUrl = BASE_URLS[0];
 const APP_ID = '250528';
 const PASS_VERSION_RECAPTCHA = '2.8';
 
@@ -53,37 +59,49 @@ async function passportPost(
   const paramStr = new URLSearchParams(
     Object.entries(qs).map(([k, v]) => [k, String(v)])
   ).toString();
-  const url = `${BASE_URL}${endpoint}?${paramStr}`;
+  // Try each TeraBox domain until one works
+  let lastError: Error | null = null;
 
-  const headers: Record<string, string> = {
-    'Content-Type': 'application/x-www-form-urlencoded',
-    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
-    'Referer': 'https://www.1024terabox.com/',
-    'Origin': 'https://www.1024terabox.com',
-    'Accept': 'application/json, text/plain, */*',
-    'Accept-Language': 'en-US,en;q=0.9',
-    ...extraHeaders,
-  };
+  for (const baseUrl of BASE_URLS) {
+    const url = `${baseUrl}${endpoint}?${paramStr}`;
 
-  const body = new URLSearchParams(
-    Object.entries(bodyParams).map(([k, v]) => [k, String(v)])
-  ).toString();
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/x-www-form-urlencoded',
+      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
+      'Referer': `${baseUrl}/`,
+      'Origin': baseUrl,
+      'Accept': 'application/json, text/plain, */*',
+      'Accept-Language': 'en-US,en;q=0.9',
+      ...extraHeaders,
+    };
 
-  try {
-    const res = await fetch(url, {
-      method: 'POST',
-      headers,
-      body,
-      redirect: 'follow',
-      signal: AbortSignal.timeout(15000),
-      cache: 'no-store',
-    });
+    const body = new URLSearchParams(
+      Object.entries(bodyParams).map(([k, v]) => [k, String(v)])
+    ).toString();
 
-    const data = await res.json();
-    return { data, status: res.status };
-  } catch (error) {
-    return { data: { errno: -1, errmsg: (error as Error).message }, status: 0 };
+    try {
+      const res = await fetch(url, {
+        method: 'POST',
+        headers,
+        body,
+        redirect: 'follow',
+        signal: AbortSignal.timeout(15000),
+        cache: 'no-store',
+      });
+
+      const data = await res.json();
+      // This domain worked — remember it for next time
+      activeBaseUrl = baseUrl;
+      return { data, status: res.status };
+    } catch (error) {
+      lastError = error as Error;
+      console.warn(`[TeraBox API] ${baseUrl} failed: ${(error as Error).message} — trying next domain`);
+      continue;
+    }
   }
+
+  // All domains failed
+  return { data: { errno: -1, errmsg: lastError?.message || 'All TeraBox domains failed' }, status: 0 };
 }
 
 // ─── Public API ───
