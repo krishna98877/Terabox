@@ -1,0 +1,83 @@
+[
+  {
+    "url": "https://developers.nopecha.com",
+    "name": "NopeCHA API",
+    "snippet": "It's free to use, for up to 100 solves per day, you can try our free service which provides 100 free credits per day. does not require email or phone ...",
+    "host_name": "developers.nopecha.com",
+    "rank": 0,
+    "date": "",
+    "favicon": ""
+  },
+  {
+    "url": "https://nopecha.com",
+    "name": "NopeCHA - Captcha Solver",
+    "snippet": "Free, fast, and accurate AI for CAPTCHA solving. Available as Chrome extension and Firefox 's get started|. Up to 100 recognitions every 24 hours. Starting at ...",
+    "host_name": "nopecha.com",
+    "rank": 1,
+    "date": "",
+    "favicon": ""
+  },
+  {
+    "url": "https://github.com/NopeCHALLC/nopecha-extension",
+    "name": "NopeCHALLC/nopecha-extension: Automated CAPTCHA",
+    "snippet": "Free to use for up to 100 requests per day. No sign-up or API key needed! Just install our extension and it will work instantly on any CAPTCHA it detects ...",
+    "host_name": "github.com",
+    "rank": 2,
+    "date": "",
+    "favicon": ""
+  },
+  {
+    "url": "https://nopecha.com/manage",
+    "name": "My Subscriptions",
+    "snippet": "Free, fast, and accurate AI. New keys may take a few minutes to appear here. issues regarding your subscription or payment, please contact our billing ...",
+    "host_name": "nopecha.com",
+    "rank": 3,
+    "date": "",
+    "favicon": ""
+  },
+  {
+    "url": "https://nopecha.com/api-reference",
+    "name": "API Reference",
+    "snippet": "Retrieve API key events for jobs submitted by the API key, including the job submission time, job completion time, and job collection time.",
+    "host_name": "nopecha.com",
+    "rank": 4,
+    "date": "",
+    "favicon": ""
+  },
+  {
+    "url": "https://pypi.org/project/nopecha",
+    "name": "nopecha",
+    "snippet": "API bindings for the NopeCHA CAPTCHA service. Installation. To install from PyPI, run python3 -m pip install nopecha . API Usage. This package provides API ...",
+    "host_name": "pypi.org",
+    "rank": 5,
+    "date": "",
+    "favicon": ""
+  },
+  {
+    "url": "https://chromewebstore.google.com/detail/nopecha-captcha-solver/dknlfmjaanfblgfdfebhijalfmhmjjjo?hl=en",
+    "name": "NopeCHA: CAPTCHA Solver - Chrome Web Store",
+    "snippet": "Automate sign-ups and logins on websites. Use NopeCHA API to in your Python, Node.js, or any other programming language. Free for personal use, Reach out to us ...",
+    "host_name": "chromewebstore.google.com",
+    "rank": 6,
+    "date": "",
+    "favicon": ""
+  },
+  {
+    "url": "https://jonathansoma.com/everything/scraping/solving-captchas-in-playwright-with-nopecha",
+    "name": "Solving CAPTCHAs in Playwright with NopeCHA",
+    "snippet": "You can get a NopeCHA API key on their website. After you have the downloaded extension folder with an API key inside you're free to re-use it for every ...",
+    "host_name": "jonathansoma.com",
+    "rank": 7,
+    "date": "",
+    "favicon": ""
+  },
+  {
+    "url": "https://nopecha.com/pricing",
+    "name": "NopeCHA - Pricing",
+    "snippet": "One credit processes up to 16 images, which is used to solve one CAPTCHA challenge. For more information, please refer to our API reference and documentation.",
+    "host_name": "nopecha.com",
+    "rank": 8,
+    "date": "",
+    "favicon": ""
+  }
+]
