@@ -223,7 +223,7 @@ async function executeApiSignup(
     // Step 4: Poll CatchMail.io for OTP email
     steps.push('Polling CatchMail.io for verification email...');
     const pollStart = new Date();
-    const message = await pollForMessages(email, 50, 4000, pollStart);
+    const message = await pollForMessages(email, 60, 3000, pollStart);
 
     if (!message) {
       steps.push('No verification email received within timeout');
@@ -364,18 +364,13 @@ export async function executeSignup(referralLink: string): Promise<SignupResult>
     await log('success', `Temp email created: ${tempEmail.address}`, signup.id);
 
     // ── Step 2: Try API-first signup (TeraBox Passport API) ──
-    // NOTE: TeraBox usually requires captcha (errno 400090) for sendcode.
-    // Without 2captcha, this will fail fast and fall back to browser.
-    // With 2captcha configured, this can work end-to-end without a browser.
-    const shouldTryApi = TWOCAPTCHA_KEY || Math.random() < 0.2; // Always try if 2captcha set, otherwise 20% chance
+    // Always try API first — sendcode sometimes works without captcha.
+    // If captcha required (errno 400090/460030), falls back to browser.
     let apiResult: { success: boolean; verificationCode?: string; password?: string; error?: string; steps: string[] } | null = null;
 
-    if (shouldTryApi) {
-      await log('info', 'Attempting API signup (passport/register_v4)...', signup.id);
-      apiResult = await executeApiSignup(tempEmail.address, referralLink, signup.id, proxy);
-    } else {
-      await log('info', 'Skipping API signup (no 2captcha, TeraBox always requires captcha) — using browser', signup.id);
-    }
+    await log('info', 'Attempting API signup (passport/register_v4)...', signup.id);
+    apiResult = await executeApiSignup(tempEmail.address, referralLink, signup.id, proxy);
+    await log('info', `API signup result: ${apiResult.success ? 'SUCCESS' : apiResult.error}`, signup.id, { steps: apiResult.steps?.slice(-5) });
 
     if (apiResult?.success) {
       // API signup succeeded — mark verified, cleanup, done
@@ -415,7 +410,7 @@ export async function executeSignup(referralLink: string): Promise<SignupResult>
     }
 
     // API signup failed or skipped — log and fall through to browser method
-    await log('warn', `API signup ${apiResult ? 'failed' : 'skipped'}: ${apiResult?.error || 'captcha required'} — falling back to browser`, signup.id);
+    await log('warn', `API signup failed: ${apiResult?.error || 'unknown'} — falling back to browser`, signup.id);
 
     // ── Step 3: Browser signup (fallback) — submit email to TeraBox ──
     await log('info', `Opening referral link in browser: ${referralLink}`, signup.id, {
@@ -471,7 +466,7 @@ export async function executeSignup(referralLink: string): Promise<SignupResult>
 
     // ── Step 4: Poll CatchMail.io for verification email ──
     const pollStart = new Date();
-    const message = await pollForMessages(tempEmail.address, 50, 4000, pollStart);
+    const message = await pollForMessages(tempEmail.address, 60, 3000, pollStart);
 
     if (!message) {
       // Cleanup the browser context since we failed
