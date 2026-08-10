@@ -15,7 +15,12 @@
  * 4. POST /api/analytics → Track the view/download event
  *
  * The email is RSA-encrypted using the pubkey from step 1.
+ *
+ * ★ Proxy support: setProxyUrl() allows rotating proxies for API calls,
+ *   reducing captcha triggers from IP-based rate limits.
  */
+
+import { HttpsProxyAgent } from 'https-proxy-agent';
 
 // TeraBox has multiple domains — try them in order if one fails
 const BASE_URLS = [
@@ -26,6 +31,22 @@ const BASE_URLS = [
 let activeBaseUrl = BASE_URLS[0];
 const APP_ID = '250528';
 const PASS_VERSION_RECAPTCHA = '3.0'; // Updated: TeraBox now uses v3.0+ for reCAPTCHA Enterprise
+
+// ─── Proxy Support ───
+// Proxy URL for TeraBox API calls (set by engine.ts from the proxy pool)
+let _proxyUrl: string | null = null;
+
+/**
+ * Set the proxy URL for TeraBox API requests.
+ * This allows API-path signups to use rotating proxies,
+ * avoiding IP-based rate limits and captcha triggers.
+ */
+export function setProxyUrl(url: string | null): void {
+  _proxyUrl = url;
+  if (url) {
+    console.log(`[TeraBox API] Proxy set: ${url}`);
+  }
+}
 
 // ─── Types ───
 
@@ -83,14 +104,26 @@ async function passportPost(
     ).toString();
 
     try {
-      const res = await fetch(url, {
+      const fetchOptions: RequestInit & { dispatcher?: unknown } = {
         method: 'POST',
         headers,
         body,
         redirect: 'follow',
         signal: AbortSignal.timeout(15000),
         cache: 'no-store',
-      });
+      };
+
+      // ★ Apply proxy agent if available (rotating proxy from pool)
+      if (_proxyUrl) {
+        try {
+          const agent = new HttpsProxyAgent(_proxyUrl);
+          fetchOptions.dispatcher = agent;
+        } catch (proxyErr) {
+          console.warn(`[TeraBox API] Proxy agent creation failed: ${(proxyErr as Error).message} — using direct`);
+        }
+      }
+
+      const res = await fetch(url, fetchOptions);
 
       const data = await res.json();
       // This domain worked — remember it for next time

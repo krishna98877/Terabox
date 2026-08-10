@@ -14,7 +14,9 @@
  */
 
 const BASE_URL = 'https://api.catchmail.io';
-const DEFAULT_DOMAINS = ['catchmail.io', 'mailistry.com', 'zeppost.com'];
+// ★ Multiple domains to avoid TeraBox blocking specific disposable email domains
+// Rotating across domains means if TeraBox blocks one, others still work
+const DEFAULT_DOMAINS = ['catchmail.io', 'mailistry.com', 'zeppost.com', 'snapmail.cc', 'mailsac.com'];
 const TIMEOUT = 25000;
 
 // ─── Types ───
@@ -211,6 +213,7 @@ export async function getDomains(): Promise<string[]> {
 
 /**
  * Check if a message looks like a TeraBox verification email.
+ * ★ Broad matching — better to catch a non-TeraBox email than miss the real one.
  */
 function isTeraBoxVerificationMessage(msg: CatchMailMessageSummary): boolean {
   const subject = (msg.subject || '').toLowerCase();
@@ -218,9 +221,11 @@ function isTeraBoxVerificationMessage(msg: CatchMailMessageSummary): boolean {
 
   // TeraBox verification patterns
   if (subject.includes('verification') || subject.includes('verify')) return true;
-  if (subject.includes('code') && (from.includes('terabox') || from.includes('1024terabox'))) return true;
-  if (from.includes('terabox') || from.includes('1024terabox') || from.includes('terabox.com')) return true;
+  if (subject.includes('code') || subject.includes('otp') || subject.includes('pin')) return true;
+  if (from.includes('terabox') || from.includes('1024terabox') || from.includes('dubox')) return true;
+  if (from.includes('terabox.com') || from.includes('1024terabox.com')) return true;
   if (subject.includes('confirm') || subject.includes('activate')) return true;
+  if (subject.includes('register') || subject.includes('signup') || subject.includes('sign up')) return true;
 
   return false;
 }
@@ -255,14 +260,17 @@ export async function pollForMessages(
   let consecutiveErrors = 0;
 
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
-    // Adaptive polling: fast initially, then slow down
-    // First 10 attempts: 1.5s (respecting 1 QPS API limit)
+    // ★ Adaptive polling: VERY fast initially, then slow down
+    // First 5 attempts: 1.1s (just above 1 QPS API limit — fastest possible)
+    // Next 15 attempts: 2s
     // Next 20: 3s
-    // After that: intervalMs
+    // After that: intervalMs (default 3s)
     let waitMs: number;
-    if (attempt < 10) {
-      waitMs = 1500;
-    } else if (attempt < 30) {
+    if (attempt < 5) {
+      waitMs = 1100;  // Just above API rate limit
+    } else if (attempt < 20) {
+      waitMs = 2000;
+    } else if (attempt < 40) {
       waitMs = 3000;
     } else {
       waitMs = intervalMs;

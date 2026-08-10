@@ -12,10 +12,10 @@
  * API Flow (preferred) — WITH REFERRAL TRACKING:
  * 1. Visit share link FIRST (sets referral cookies)
  * 2. GET /api/shorturlinfo → get shareid, uk, sign for the shared file
- * 3. Create temp email via CatchMail.io
+ * 3. Create temp email via CatchMail.io (rotates across 5+ domains)
  * 4. POST /passport/register_v4/sendcode → send OTP to email
- * 5. If captcha required: solve via CaptchaSolv → retry with g_identity
- * 6. Poll CatchMail.io inbox for OTP email
+ * 5. If captcha required: solve via CaptchaSolv (parallel EntV2+V2) → retry
+ * 6. Poll CatchMail.io inbox for OTP email (adaptive: 1.1s → 2s → 3s)
  * 7. POST /passport/register_v4/verify → verify OTP
  * 8. POST /passport/register_v4/finish → set password, complete
  * 9. POST /passport/login → get bdstoken (auth token)
@@ -63,6 +63,7 @@ import {
   reportUserActivity,
   extractSurlFromLink,
   visitShareLink,
+  setProxyUrl as setTeraboxProxyUrl,
 } from '@/lib/terabox/api';
 import type { ProxyInfo } from '@/lib/proxy';
 import { isCaptchaConfigured, solveRecaptcha } from '@/lib/captcha';
@@ -255,7 +256,7 @@ async function executeApiSignup(
     // Step 4: Poll CatchMail.io for OTP email (adaptive: fast start, longer gaps later)
     steps.push('Polling CatchMail.io for verification email...');
     const pollStart = new Date();
-    const message = await pollForMessages(email, 70, 2500, pollStart); // 70 attempts × 2.5s = 175s
+    const message = await pollForMessages(email, 50, 2500, pollStart); // 50 attempts × adaptive intervals ≈ 120s
 
     if (!message) {
       steps.push('No verification email received within timeout');
@@ -360,12 +361,17 @@ export async function executeSignup(referralLink: string): Promise<SignupResult>
   try {
     proxy = await getNextProxy();
     if (proxy) {
-      await log('info', `Using proxy: ${proxy.host}:${proxy.port}`, signup.id);
+      await log('info', `Using proxy: ${proxy.host}:${proxy.port}${proxy.country ? ` (${proxy.country})` : ''} [${proxy.source || 'unknown'}]`, signup.id);
+      // ★ Set proxy on TeraBox API so API-path signups also use it
+      // This reduces captcha triggers from IP-based rate limits
+      setTeraboxProxyUrl(proxy.url);
     } else {
       await log('info', 'No proxy available — using direct connection', signup.id);
+      setTeraboxProxyUrl(null);
     }
   } catch (err) {
     await log('warn', `Proxy rotation failed: ${(err as Error).message}`, signup.id);
+    setTeraboxProxyUrl(null);
   }
 
   let signupResult: BrowserSignupResult | null = null;
@@ -568,7 +574,7 @@ export async function executeSignup(referralLink: string): Promise<SignupResult>
 
     // ── Step 4: Poll CatchMail.io for verification email ──
     const pollStart = new Date();
-    const message = await pollForMessages(tempEmail.address, 70, 2500, pollStart);
+    const message = await pollForMessages(tempEmail.address, 50, 2500, pollStart);
 
     if (!message) {
       // Cleanup the browser context since we failed

@@ -1,13 +1,25 @@
 /**
- * Proxy Rotation Manager — Fetches, validates, and rotates free proxies.
+ * Proxy Rotation Manager — Proxifly API + free list fallback.
  *
- * Strategy:
- * - Fetch proxies from multiple free APIs on startup
- * - Validate each proxy by testing HTTP connectivity (using https-proxy-agent)
- * - Maintain a pool of working proxies
- * - Rotate through the pool (round-robin) for each signup
- * - Auto-refresh when pool is depleted or proxies go stale
- * - If no proxies available, fall back to direct connection
+ * STRATEGY (layered — Proxifly first, free lists as backup):
+ * 1. PRIMARY: Proxifly API (api.proxifly.dev) — rotating HTTPS proxies,
+ *    tested by Proxifly before delivery. Free tier: no API key needed.
+ * 2. BACKUP:  Free proxy list APIs (ProxyScrape, GitHub lists) — validated
+ *    locally via https-proxy-agent. Less reliable but adds pool diversity.
+ *
+ * FEATURES:
+ * - Proxifly on-demand proxy per signup (rotates automatically on each call)
+ * - Batch validation of free proxies (concurrent, timeout-aware)
+ * - Round-robin rotation through validated pool
+ * - Auto-refresh when pool is stale/depleted (every 5 min)
+ * - Failure tracking: remove proxy after 3 consecutive fails
+ * - Direct-connection fallback if no proxy available
+ *
+ * PROXIFLY API: https://proxifly.dev/
+ *   POST https://api.proxifly.dev/get-proxy
+ *   Body: { quantity: N, protocol: [...], https: true, anonymity: [...] }
+ *   Response: { proxy, protocol, ip, port, https, anonymity, geolocation }
+ *   Free tier: no API key needed, ~1 proxy per call
  */
 
 import { HttpsProxyAgent } from 'https-proxy-agent';
@@ -20,6 +32,7 @@ export interface ProxyInfo {
   port: number;
   protocol: 'http' | 'https' | 'socks4' | 'socks5';
   country?: string;
+  source?: string;       // which provider gave us this proxy
   lastVerified: number;  // timestamp
   failCount: number;
   successCount: number;
@@ -34,9 +47,92 @@ let lastRefreshTime = 0;
 const REFRESH_INTERVAL = 5 * 60 * 1000; // 5 minutes
 const MAX_FAILS = 3; // Remove proxy after 3 consecutive failures
 
-// ─── Free Proxy API Sources ───
+// ─── Proxifly API (Primary Source) ───
 
-const PROXY_SOURCES = [
+const PROXIFLY_API = 'https://api.proxifly.dev/get-proxy';
+const PROXIFLY_API_KEY = () => process.env.PROXIFLY_API_KEY || ''; // optional paid key
+
+interface ProxiflyResponse {
+  proxy: string;        // e.g. "http://1.2.3.4:8080"
+  protocol: string;     // e.g. "http"
+  ip: string;
+  port: number;
+  https: boolean;
+  anonymity: string;    // e.g. "transparent", "anonymous", "elite"
+  score: number;
+  geolocation?: {
+    country: string;
+    city: string;
+  };
+}
+
+/**
+ * Fetch proxies from Proxifly API.
+ * Each call returns 1 proxy (free tier). We call multiple times for diversity.
+ * Proxifly pre-tests proxies before delivery — much more reliable than raw lists.
+ */
+async function fetchFromProxifly(count = 10): Promise<ProxyInfo[]> {
+  const proxies: ProxyInfo[] = [];
+  const apiKey = PROXIFLY_API_KEY();
+
+  console.log(`[Proxy] Fetching ${count} proxies from Proxifly API...`);
+
+  // Fetch concurrently (each call returns 1 proxy)
+  const results = await Promise.allSettled(
+    Array.from({ length: count }, async () => {
+      try {
+        const body: Record<string, unknown> = {
+          quantity: 1,
+          protocol: ['http', 'socks5'],
+          https: true,
+        };
+        if (apiKey) {
+          body.apiKey = apiKey;
+        }
+
+        const res = await fetch(PROXIFLY_API, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+          signal: AbortSignal.timeout(10000),
+          cache: 'no-store',
+        });
+
+        if (!res.ok) return null;
+
+        const data: ProxiflyResponse = await res.json();
+        if (!data?.proxy || !data?.ip) return null;
+
+        return {
+          url: data.proxy,
+          host: data.ip,
+          port: data.port,
+          protocol: (data.protocol || 'http') as ProxyInfo['protocol'],
+          country: data.geolocation?.country,
+          source: 'proxifly',
+          lastVerified: Date.now(), // Proxifly pre-tests, so trust it
+          failCount: 0,
+          successCount: 0,
+        } as ProxyInfo;
+      } catch {
+        return null;
+      }
+    })
+  );
+
+  for (const result of results) {
+    if (result.status === 'fulfilled' && result.value) {
+      proxies.push(result.value);
+    }
+  }
+
+  console.log(`[Proxy] Proxifly: got ${proxies.length}/${count} proxies`);
+  return proxies;
+}
+
+// ─── Free Proxy API Sources (Backup) ───
+
+const FREE_PROXY_SOURCES = [
   {
     name: 'proxyscrape',
     url: 'https://api.proxyscrape.com/v3/free-proxy-list/get?request=displayproxies&protocol=http&timeout=10000&proxy_format=display&anonymity=transparent&anonymity=anonymous',
@@ -61,7 +157,7 @@ const PROXY_SOURCES = [
 
 // ─── Parse proxy string to ProxyInfo ───
 
-function parseProxy(line: string): ProxyInfo | null {
+function parseProxy(line: string, source = 'free-list'): ProxyInfo | null {
   try {
     const parts = line.trim().split(':');
     if (parts.length < 2) return null;
@@ -73,6 +169,7 @@ function parseProxy(line: string): ProxyInfo | null {
       host,
       port,
       protocol: 'http',
+      source,
       lastVerified: 0,
       failCount: 0,
       successCount: 0,
@@ -82,9 +179,14 @@ function parseProxy(line: string): ProxyInfo | null {
   }
 }
 
-// ─── Validate a single proxy using https-proxy-agent ───
+// ─── Validate a single proxy ───
 
 async function validateProxy(proxy: ProxyInfo, timeoutMs = 8000): Promise<boolean> {
+  // Proxifly proxies are pre-validated — just do a quick connectivity check
+  if (proxy.source === 'proxifly' && proxy.lastVerified > Date.now() - 60000) {
+    return true; // Trust Proxifly's pre-test if less than 1 min old
+  }
+
   try {
     const agent = new HttpsProxyAgent(proxy.url);
     const controller = new AbortController();
@@ -101,7 +203,6 @@ async function validateProxy(proxy: ProxyInfo, timeoutMs = 8000): Promise<boolea
 
     if (res.ok) {
       const data = await res.json();
-      // If we get a different IP than our own, the proxy works
       if (data?.origin) {
         proxy.lastVerified = Date.now();
         return true;
@@ -109,7 +210,7 @@ async function validateProxy(proxy: ProxyInfo, timeoutMs = 8000): Promise<boolea
     }
     return false;
   } catch {
-    // Fallback: try a simpler validation using direct TCP connection
+    // Fallback: try a simpler validation
     try {
       const agent = new HttpsProxyAgent(proxy.url);
       const controller = new AbortController();
@@ -125,7 +226,6 @@ async function validateProxy(proxy: ProxyInfo, timeoutMs = 8000): Promise<boolea
       });
 
       clearTimeout(timer);
-      // Any response (even redirect) means the proxy connected
       if (res.status >= 200 && res.status < 500) {
         proxy.lastVerified = Date.now();
         return true;
@@ -135,13 +235,13 @@ async function validateProxy(proxy: ProxyInfo, timeoutMs = 8000): Promise<boolea
   }
 }
 
-// ─── Fetch proxies from all sources ───
+// ─── Fetch proxies from free list sources ───
 
-async function fetchFromSources(): Promise<ProxyInfo[]> {
+async function fetchFromFreeLists(): Promise<ProxyInfo[]> {
   const allProxies: ProxyInfo[] = [];
 
   const results = await Promise.allSettled(
-    PROXY_SOURCES.map(async (source) => {
+    FREE_PROXY_SOURCES.map(async (source) => {
       try {
         const res = await fetch(source.url, {
           signal: AbortSignal.timeout(10000),
@@ -150,7 +250,7 @@ async function fetchFromSources(): Promise<ProxyInfo[]> {
         if (!res.ok) return [];
         const text = await res.text();
         const lines = source.parse(text);
-        return lines.map(parseProxy).filter((p): p is ProxyInfo => p !== null);
+        return lines.map(l => parseProxy(l, source.name)).filter((p): p is ProxyInfo => p !== null);
       } catch {
         return [];
       }
@@ -173,7 +273,7 @@ async function fetchFromSources(): Promise<ProxyInfo[]> {
   });
 }
 
-// ─── Validate proxies in batch (fast concurrent validation) ───
+// ─── Validate proxies in batch ───
 
 async function validateBatch(proxies: ProxyInfo[], concurrency = 10): Promise<ProxyInfo[]> {
   const valid: ProxyInfo[] = [];
@@ -200,7 +300,7 @@ async function validateBatch(proxies: ProxyInfo[], concurrency = 10): Promise<Pr
 
 /**
  * Initialize and refresh the proxy pool.
- * Fetches proxies from free APIs and validates them.
+ * Strategy: Proxifly first (fast, pre-validated), then free lists as backup.
  */
 export async function refreshProxyPool(): Promise<{ fetched: number; validated: number; total: number }> {
   if (isRefreshing) {
@@ -211,25 +311,43 @@ export async function refreshProxyPool(): Promise<{ fetched: number; validated: 
   console.log('[Proxy] Refreshing proxy pool...');
 
   try {
-    // Fetch raw proxies
-    const rawProxies = await fetchFromSources();
-    console.log(`[Proxy] Fetched ${rawProxies.length} raw proxies from ${PROXY_SOURCES.length} sources`);
+    // ── Phase 1: Proxifly (primary — fast, pre-validated) ──
+    const proxiflyProxies = await fetchFromProxifly(10);
 
-    // Validate a sample (first 80 to improve chances)
-    const toValidate = rawProxies.slice(0, 80);
-    const validProxies = await validateBatch(toValidate, 15);
-    console.log(`[Proxy] Validated ${validProxies.length} working proxies`);
+    // ── Phase 2: Free lists (backup — needs validation) ──
+    const freeRawProxies = await fetchFromFreeLists();
+    console.log(`[Proxy] Fetched ${freeRawProxies.length} raw proxies from ${FREE_PROXY_SOURCES.length} free sources`);
+
+    // Validate a sample of free proxies (first 50 — don't waste time on too many)
+    const toValidate = freeRawProxies.slice(0, 50);
+    const validFreeProxies = await validateBatch(toValidate, 15);
+    console.log(`[Proxy] Validated ${validFreeProxies.length} working free proxies`);
+
+    // ── Merge: Proxifly first (they're pre-validated), then free proxies ──
+    const allNew = [...proxiflyProxies, ...validFreeProxies];
 
     // Merge with existing pool (keep working proxies, add new ones)
     const existingUrls = new Set(proxyPool.map(p => p.url));
-    const newProxies = validProxies.filter(p => !existingUrls.has(p.url));
+    const newProxies = allNew.filter(p => !existingUrls.has(p.url));
 
-    proxyPool = [...proxyPool.filter(p => p.failCount < MAX_FAILS), ...newProxies];
+    // Keep existing working proxies, add new ones
+    // Proxifly proxies go first in the pool for priority
+    proxyPool = [
+      ...proxyPool.filter(p => p.failCount < MAX_FAILS), // keep working existing
+      ...newProxies,
+    ];
     currentIndex = 0;
     lastRefreshTime = Date.now();
 
-    console.log(`[Proxy] Pool size: ${proxyPool.length} proxies`);
-    return { fetched: rawProxies.length, validated: validProxies.length, total: proxyPool.length };
+    const proxiflyCount = proxyPool.filter(p => p.source === 'proxifly').length;
+    const freeCount = proxyPool.filter(p => p.source !== 'proxifly').length;
+    console.log(`[Proxy] Pool size: ${proxyPool.length} (Proxifly: ${proxiflyCount}, Free: ${freeCount})`);
+
+    return {
+      fetched: freeRawProxies.length + proxiflyProxies.length,
+      validated: validFreeProxies.length + proxiflyProxies.length,
+      total: proxyPool.length,
+    };
   } catch (error) {
     console.error('[Proxy] Refresh failed:', (error as Error).message);
     return { fetched: 0, validated: 0, total: proxyPool.length };
@@ -240,6 +358,7 @@ export async function refreshProxyPool(): Promise<{ fetched: number; validated: 
 
 /**
  * Get the next proxy in rotation.
+ * Prefers Proxifly proxies (they're pre-validated and rotate automatically).
  * Auto-refreshes if pool is empty or stale.
  */
 export async function getNextProxy(): Promise<ProxyInfo | null> {
@@ -253,11 +372,25 @@ export async function getNextProxy(): Promise<ProxyInfo | null> {
     return null;
   }
 
-  // Round-robin rotation
-  const proxy = proxyPool[currentIndex % proxyPool.length];
-  currentIndex++;
+  // Prefer Proxifly proxies (source === 'proxifly') — they rotate automatically
+  const proxiflyProxies = proxyPool.filter(p => p.source === 'proxifly' && p.failCount < MAX_FAILS);
+  if (proxiflyProxies.length > 0) {
+    // Round-robin through Proxifly proxies
+    const proxy = proxiflyProxies[currentIndex % proxiflyProxies.length];
+    currentIndex++;
+    return proxy;
+  }
 
-  return proxy;
+  // Fallback: any working proxy
+  const workingProxies = proxyPool.filter(p => p.failCount < MAX_FAILS);
+  if (workingProxies.length > 0) {
+    const proxy = workingProxies[currentIndex % workingProxies.length];
+    currentIndex++;
+    return proxy;
+  }
+
+  console.warn('[Proxy] No working proxies — using direct connection');
+  return null;
 }
 
 /**
@@ -293,15 +426,24 @@ export function getProxyStatus(): {
   currentIndex: number;
   lastRefresh: string;
   isRefreshing: boolean;
-  proxies: Array<{ url: string; successCount: number; failCount: number }>;
+  proxiflyCount: number;
+  freeCount: number;
+  proxies: Array<{ url: string; source?: string; country?: string; successCount: number; failCount: number }>;
 } {
+  const proxiflyCount = proxyPool.filter(p => p.source === 'proxifly').length;
+  const freeCount = proxyPool.filter(p => p.source !== 'proxifly').length;
+
   return {
     poolSize: proxyPool.length,
     currentIndex,
     lastRefresh: lastRefreshTime ? new Date(lastRefreshTime).toISOString() : 'never',
     isRefreshing,
+    proxiflyCount,
+    freeCount,
     proxies: proxyPool.slice(0, 20).map(p => ({
       url: p.url,
+      source: p.source,
+      country: p.country,
       successCount: p.successCount,
       failCount: p.failCount,
     })),
@@ -312,7 +454,7 @@ export function getProxyStatus(): {
  * Set custom proxy list (for user-configured proxies).
  */
 export function setCustomProxies(proxies: string[]): void {
-  const parsed = proxies.map(parseProxy).filter((p): p is ProxyInfo => p !== null);
+  const parsed = proxies.map(l => parseProxy(l, 'custom')).filter((p): p is ProxyInfo => p !== null);
   proxyPool = [...parsed, ...proxyPool];
   console.log(`[Proxy] Added ${parsed.length} custom proxies (pool: ${proxyPool.length})`);
 }
