@@ -1,29 +1,31 @@
 /**
  * CaptchaSolv — Fast & reliable CAPTCHA solving API.
- * https://docs.captchasolv.com/
+ * https://docs.captchasolv.com/getting-started/
  *
  * ═══════════════════════════════════════════════════════════════════
- * FREE: 100 solves/day (get API key via Discord /panel)
+ * FREE: 100 solves/day (claim via Discord /claim or Telegram bot)
  * ═══════════════════════════════════════════════════════════════════
  *
- * Features:
+ * Per official docs (https://docs.captchasolv.com/):
  * - 2captcha-compatible API format
- * - Sync endpoint: POST /solve (recommended — handles polling internally)
- * - Async: POST /createTask → POST /getTaskResult (for advanced use)
+ * - Sync endpoint: POST /solve (recommended — handles polling internally, 120s timeout)
+ * - Async: POST /createTask → POST /getTaskResult (3-5s poll interval)
  * - 10+ captcha types, average solve time < 15s
- * - Supports reCAPTCHA v2/v3, Turnstile, hCaptcha, GeeTest v4, and more
+ * - Supports reCAPTCHA v2/v3, v2 Enterprise, v3 Enterprise, Turnstile, hCaptcha, GeeTest v4
+ * - waitForSlot: true queues instead of failing on ERROR_LIMIT_EXCEEDED (waits up to 300s)
+ * - Token expiry: ~2 min for reCAPTCHA, ~5 min for Turnstile — use immediately!
  *
- * API Key: Get via Telegram bot or Discord /panel command
+ * API Key: Get via Discord /panel command or Telegram bot
  * Set CAPTCHASOLV_API_KEY env var
  *
  * Base URL: https://v1.captchasolv.com
  */
 
 const API_BASE = 'https://v1.captchasolv.com';
-const SYNC_TIMEOUT = 130_000; // 130s (API timeout is 120s, add buffer)
-const ASYNC_POLL_INTERVAL = 3000; // 3 seconds
+const SYNC_TIMEOUT = 130_000; // 130s (docs: API timeout is 120s, set client >= 130s)
+const ASYNC_POLL_INTERVAL = 3000; // 3 seconds (docs recommend 3-5s)
 const ASYNC_MAX_POLL = 40; // 40 * 3s = 120s max
-const MAX_RETRIES = 3; // Retry on ERROR_CAPTCHA_UNSOLVABLE
+const MAX_RETRIES = 3; // Retry on ERROR_CAPTCHA_UNSOLVABLE (per docs)
 
 // ─── Types ───
 
@@ -43,7 +45,7 @@ export interface CaptchaSolvBalance {
   error?: string;
 }
 
-// ─── Task Types ───
+// ─── Task Types (per https://docs.captchasolv.com/captcha-types/) ───
 
 export const TASK_TYPES = {
   // reCAPTCHA v2
@@ -51,7 +53,7 @@ export const TASK_TYPES = {
   RECAPTCHA_V2_PROXY: 'RecaptchaV2Task',
   RECAPTCHA_V2_INVISIBLE: 'RecaptchaV2InvisibleTaskProxyless',
   RECAPTCHA_V2_INVISIBLE_PROXY: 'RecaptchaV2InvisibleTask',
-  // reCAPTCHA v2 Enterprise
+  // reCAPTCHA v2 Enterprise (TeraBox uses this!)
   RECAPTCHA_V2_ENTERPRISE: 'RecaptchaV2EnterpriseTaskProxyless',
   RECAPTCHA_V2_ENTERPRISE_PROXY: 'RecaptchaV2EnterpriseTask',
   RECAPTCHA_V2_ENTERPRISE_INVISIBLE: 'RecaptchaV2EnterpriseInvisibleTaskProxyless',
@@ -59,6 +61,9 @@ export const TASK_TYPES = {
   // reCAPTCHA v3
   RECAPTCHA_V3: 'RecaptchaV3TaskProxyless',
   RECAPTCHA_V3_PROXY: 'RecaptchaV3Task',
+  // reCAPTCHA v3 Enterprise
+  RECAPTCHA_V3_ENTERPRISE: 'RecaptchaV3EnterpriseTaskProxyless',
+  RECAPTCHA_V3_ENTERPRISE_PROXY: 'RecaptchaV3EnterpriseTask',
   // Cloudflare Turnstile
   TURNSTILE: 'TurnstileTaskProxyless',
   TURNSTILE_PROXY: 'TurnstileTask',
@@ -70,19 +75,19 @@ export const TASK_TYPES = {
   GEETEST_V4_PROXY: 'GeeTestV4Task',
 } as const;
 
-// ─── Error Codes ───
+// ─── Error Codes (per docs: errorId 0=success, 1=invalid, 2=bad key, 3=bad type, 10=limit, 12=unsolvable, 15=proxy, 16=not found) ───
 
 const RETRYABLE_ERRORS = new Set([
-  'ERROR_CAPTCHA_UNSOLVABLE',
+  'ERROR_CAPTCHA_UNSOLVABLE', // errorId 12 — only this one should be retried per docs
 ]);
 
 const FATAL_ERRORS: Record<string, string> = {
-  'ERROR_INVALID_REQUEST': 'Invalid request format',
-  'ERROR_KEY_DOES_NOT_EXIST': 'Invalid API key',
-  'ERROR_UNSUPPORTED_CAPTCHA_TYPE': 'Unknown task type',
-  'ERROR_LIMIT_EXCEEDED': 'Rate limit or balance exceeded',
-  'ERROR_PROXY_BLOCKED': 'Proxy/IP hard blocked by target',
-  'ERROR_NO_SUCH_CAPCHA_ID': 'Task ID not found or expired',
+  'ERROR_INVALID_REQUEST': 'Invalid request format (errorId 1)',
+  'ERROR_KEY_DOES_NOT_EXIST': 'Invalid API key (errorId 2)',
+  'ERROR_UNSUPPORTED_CAPTCHA_TYPE': 'Unknown task type (errorId 3)',
+  'ERROR_LIMIT_EXCEEDED': 'Rate/balance limit exceeded (errorId 10) — use waitForSlot: true',
+  'ERROR_PROXY_BLOCKED': 'Proxy/IP hard blocked by target (errorId 15)',
+  'ERROR_NO_SUCH_CAPCHA_ID': 'Task ID not found or expired (errorId 16)',
 };
 
 // ─── Core API ───
@@ -117,15 +122,14 @@ async function apiPost(
   }
 }
 
-// ─── Sync Solve (Recommended) ───
+// ─── Sync Solve (Recommended per docs) ───
 
 /**
  * Solve CAPTCHA synchronously — POST /solve
- * This is the recommended endpoint. It handles polling internally
+ * Per docs: This is the recommended endpoint. It handles polling internally
  * and returns the result directly (up to 120s timeout).
- *
- * Request body is same as /createTask.
  * Set HTTP client timeout to at least 130s.
+ * Supports waitForSlot: true to queue instead of failing on rate limits.
  */
 async function solveSync(
   apiKey: string,
@@ -150,7 +154,7 @@ async function solveSync(
       const solveTime = (Date.now() - startTime) / 1000;
       const solution: Record<string, string> = {};
 
-      // Extract solution fields
+      // Extract solution fields per docs
       if (res.solution.token) solution.token = res.solution.token;
       if (res.solution.gRecaptchaResponse) solution.gRecaptchaResponse = res.solution.gRecaptchaResponse;
       if (res.solution.userAgent) solution.userAgent = res.solution.userAgent;
@@ -210,13 +214,19 @@ async function solveSync(
 /**
  * Create async task — POST /createTask
  * Returns taskId for polling with getTaskResult.
+ * Per docs: supports waitForSlot on createTask too.
  */
 async function createTask(
   apiKey: string,
-  task: Record<string, unknown>
+  task: Record<string, unknown>,
+  waitForSlot = true
 ): Promise<{ taskId?: string; error?: string; errorCode?: string }> {
   try {
-    const res = await apiPost('/createTask', { clientKey: apiKey, task }, 15000);
+    const body: Record<string, unknown> = { clientKey: apiKey, task };
+    if (waitForSlot) {
+      body.waitForSlot = true;
+    }
+    const res = await apiPost('/createTask', body, 15000);
 
     if (res.errorId === 0 && res.taskId) {
       return { taskId: res.taskId };
@@ -256,6 +266,7 @@ async function getTaskResult(
       if (res.solution.gRecaptchaResponse) solution.gRecaptchaResponse = res.solution.gRecaptchaResponse;
       if (res.solution.userAgent) solution.userAgent = res.solution.userAgent;
       if (res.solution.cookie) solution.cookie = res.solution.cookie;
+      if (res.solution.sensor) solution.sensor = res.solution.sensor;
 
       return { ready: true, solution, cost: res.cost };
     }
@@ -291,7 +302,7 @@ async function solveAsync(
   const taskId = createRes.taskId;
   console.log(`[CaptchaSolv] Task created: ${taskId} (type: ${task.type})`);
 
-  // Wait before first poll
+  // Wait before first poll (docs: 3-5s)
   await new Promise(r => setTimeout(r, ASYNC_POLL_INTERVAL));
 
   // Poll for result
@@ -335,6 +346,54 @@ async function solveAsync(
   };
 }
 
+// ─── Helper: retry loop for all solve functions ───
+
+async function solveWithRetry(
+  key: string,
+  task: Record<string, unknown>,
+  label: string
+): Promise<SolveResult> {
+  for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
+    const result = await solveSync(key, task);
+    if (result.success) return result;
+
+    if (!RETRYABLE_ERRORS.has(result.errorCode || '')) {
+      return result; // Fatal error, don't retry
+    }
+
+    console.warn(`[CaptchaSolv] ${label} unsolvable (attempt ${attempt + 1}/${MAX_RETRIES}), retrying...`);
+    if (attempt < MAX_RETRIES - 1) {
+      await new Promise(r => setTimeout(r, 2000));
+    }
+  }
+  return { success: false, error: `Max retries exceeded for ${label}`, provider: 'captchasolv' };
+}
+
+/**
+ * Retry loop using async polling (for long-running Enterprise tasks
+ * where sync /solve may 504 via Cloudflare gateway).
+ */
+async function solveWithRetryAsync(
+  key: string,
+  task: Record<string, unknown>,
+  label: string
+): Promise<SolveResult> {
+  for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
+    const result = await solveAsync(key, task);
+    if (result.success) return result;
+
+    if (!RETRYABLE_ERRORS.has(result.errorCode || '')) {
+      return result; // Fatal error, don't retry
+    }
+
+    console.warn(`[CaptchaSolv] ${label} unsolvable (attempt ${attempt + 1}/${MAX_RETRIES}), retrying...`);
+    if (attempt < MAX_RETRIES - 1) {
+      await new Promise(r => setTimeout(r, 2000));
+    }
+  }
+  return { success: false, error: `Max retries exceeded for ${label}`, provider: 'captchasolv' };
+}
+
 // ─── Public API ───
 
 const API_KEY = () => process.env.CAPTCHASOLV_API_KEY || '';
@@ -345,11 +404,8 @@ export function isConfigured(): boolean {
 
 /**
  * Solve reCAPTCHA v2 via CaptchaSolv.
- * Free: 100 solves/day.
- *
- * Task types:
- * - RecaptchaV2TaskProxyless (no proxy)
- * - RecaptchaV2InvisibleTaskProxyless (invisible, no proxy)
+ * Per docs: RecaptchaV2TaskProxyless / RecaptchaV2InvisibleTaskProxyless
+ * Required: websiteURL, websiteKey
  */
 export async function solveRecaptchaV2(
   siteKey: string,
@@ -363,18 +419,20 @@ export async function solveRecaptchaV2(
     ? TASK_TYPES.RECAPTCHA_V2_INVISIBLE
     : TASK_TYPES.RECAPTCHA_V2;
 
-  const task = {
-    type: taskType,
-    websiteURL: pageUrl,
-    websiteKey: siteKey,
-  };
+  const task = { type: taskType, websiteURL: pageUrl, websiteKey: siteKey };
 
   console.log(`[CaptchaSolv] Solving reCAPTCHA v2${invisible ? ' (invisible)' : ''} for ${pageUrl.substring(0, 60)}...`);
 
-  // Retry on ERROR_CAPTCHA_UNSOLVABLE
+  // Try sync first (fast when it works), fallback to async if sync fails with timeout/504
   for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
     const result = await solveSync(key, task);
     if (result.success) return result;
+
+    // If sync timed out or got 504, retry with async
+    if (result.error?.includes('504') || result.error?.includes('abort') || result.error?.includes('Timeout')) {
+      console.warn(`[CaptchaSolv] Sync failed (${result.error?.substring(0, 50)}), switching to async mode...`);
+      return solveWithRetryAsync(key, task, 'reCAPTCHA v2 (async fallback)');
+    }
 
     if (!RETRYABLE_ERRORS.has(result.errorCode || '')) {
       return result; // Fatal error, don't retry
@@ -382,19 +440,47 @@ export async function solveRecaptchaV2(
 
     console.warn(`[CaptchaSolv] reCAPTCHA v2 unsolvable (attempt ${attempt + 1}/${MAX_RETRIES}), retrying...`);
     if (attempt < MAX_RETRIES - 1) {
-      await new Promise(r => setTimeout(r, 2000)); // Wait 2s before retry
+      await new Promise(r => setTimeout(r, 2000));
     }
   }
-
   return { success: false, error: 'Max retries exceeded for reCAPTCHA v2', provider: 'captchasolv' };
 }
 
 /**
- * Solve reCAPTCHA v3 via CaptchaSolv.
- * Free: 100 solves/day.
+ * Solve reCAPTCHA v2 Enterprise via CaptchaSolv.
+ * ★ TeraBox uses Enterprise reCAPTCHA (errno 460030) — this is the correct type!
  *
- * Task types:
- * - RecaptchaV3TaskProxyless (no proxy)
+ * Per docs: RecaptchaV2EnterpriseTaskProxyless / RecaptchaV2EnterpriseInvisibleTaskProxyless
+ * Required: websiteURL, websiteKey
+ * Detection: script src uses enterprise.js instead of api.js
+ *
+ * ★ Uses ASYNC polling (createTask → getTaskResult) because Enterprise v2
+ *   can take 40-75s and the sync /solve endpoint may 504 via Cloudflare.
+ *   Async avoids the gateway timeout issue.
+ */
+export async function solveRecaptchaV2Enterprise(
+  siteKey: string,
+  pageUrl: string,
+  invisible = false
+): Promise<SolveResult> {
+  const key = API_KEY();
+  if (!key) return { success: false, error: 'CAPTCHASOLV_API_KEY not set' };
+
+  const taskType = invisible
+    ? TASK_TYPES.RECAPTCHA_V2_ENTERPRISE_INVISIBLE
+    : TASK_TYPES.RECAPTCHA_V2_ENTERPRISE;
+
+  const task = { type: taskType, websiteURL: pageUrl, websiteKey: siteKey };
+
+  console.log(`[CaptchaSolv] Solving reCAPTCHA v2 Enterprise${invisible ? ' (invisible)' : ''} for ${pageUrl.substring(0, 60)}... (async mode)`);
+  return solveWithRetryAsync(key, task, 'reCAPTCHA v2 Enterprise');
+}
+
+/**
+ * Solve reCAPTCHA v3 via CaptchaSolv.
+ * Per docs: RecaptchaV3TaskProxyless
+ * Required: websiteURL, websiteKey
+ * Optional: pageAction (string, e.g. "login"), score ("normal" or "high")
  */
 export async function solveRecaptchaV3(
   siteKey: string,
@@ -411,35 +497,50 @@ export async function solveRecaptchaV3(
     websiteKey: siteKey,
   };
 
-  // CaptchaSolv uses "score" param for v3 score mode
-  if (minScore >= 0.7) {
-    task.score = 'high';
-  } else {
-    task.score = 'normal';
+  // Per docs: score is "normal" (default) or "high" (for sites requiring score >= 0.7)
+  task.score = minScore >= 0.7 ? 'high' : 'normal';
+
+  // Per docs: pageAction should match what the site expects (from grecaptcha.execute)
+  if (action) {
+    task.pageAction = action;
   }
 
-  console.log(`[CaptchaSolv] Solving reCAPTCHA v3 for ${pageUrl.substring(0, 60)}... (score: ${task.score})`);
+  console.log(`[CaptchaSolv] Solving reCAPTCHA v3 for ${pageUrl.substring(0, 60)}... (score: ${task.score}, action: ${action || 'default'})`);
+  return solveWithRetry(key, task, 'reCAPTCHA v3');
+}
 
-  for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
-    const result = await solveSync(key, task);
-    if (result.success) return result;
+/**
+ * Solve reCAPTCHA v3 Enterprise via CaptchaSolv.
+ * Per docs: RecaptchaV3EnterpriseTaskProxyless
+ * Same params as v3: websiteURL, websiteKey, pageAction, score
+ * Detection: enterprise.js + grecaptcha.enterprise.execute()
+ */
+export async function solveRecaptchaV3Enterprise(
+  siteKey: string,
+  pageUrl: string,
+  minScore = 0.3,
+  action = ''
+): Promise<SolveResult> {
+  const key = API_KEY();
+  if (!key) return { success: false, error: 'CAPTCHASOLV_API_KEY not set' };
 
-    if (!RETRYABLE_ERRORS.has(result.errorCode || '')) {
-      return result;
-    }
+  const task: Record<string, unknown> = {
+    type: TASK_TYPES.RECAPTCHA_V3_ENTERPRISE,
+    websiteURL: pageUrl,
+    websiteKey: siteKey,
+  };
 
-    console.warn(`[CaptchaSolv] reCAPTCHA v3 unsolvable (attempt ${attempt + 1}/${MAX_RETRIES}), retrying...`);
-    if (attempt < MAX_RETRIES - 1) {
-      await new Promise(r => setTimeout(r, 2000));
-    }
-  }
+  task.score = minScore >= 0.7 ? 'high' : 'normal';
+  if (action) task.pageAction = action;
 
-  return { success: false, error: 'Max retries exceeded for reCAPTCHA v3', provider: 'captchasolv' };
+  console.log(`[CaptchaSolv] Solving reCAPTCHA v3 Enterprise for ${pageUrl.substring(0, 60)}... (score: ${task.score})`);
+  return solveWithRetry(key, task, 'reCAPTCHA v3 Enterprise'); // v3 is fast (3-5s), sync is fine
 }
 
 /**
  * Solve Cloudflare Turnstile via CaptchaSolv.
- * Free: 100 solves/day.
+ * Per docs: TurnstileTaskProxyless
+ * Required: websiteURL, websiteKey
  */
 export async function solveTurnstile(
   siteKey: string,
@@ -448,29 +549,16 @@ export async function solveTurnstile(
   const key = API_KEY();
   if (!key) return { success: false, error: 'CAPTCHASOLV_API_KEY not set' };
 
-  const task = {
-    type: TASK_TYPES.TURNSTILE,
-    websiteURL: pageUrl,
-    websiteKey: siteKey,
-  };
+  const task = { type: TASK_TYPES.TURNSTILE, websiteURL: pageUrl, websiteKey: siteKey };
 
   console.log(`[CaptchaSolv] Solving Turnstile for ${pageUrl.substring(0, 60)}...`);
-
-  for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
-    const result = await solveSync(key, task);
-    if (result.success) return result;
-    if (!RETRYABLE_ERRORS.has(result.errorCode || '')) return result;
-
-    console.warn(`[CaptchaSolv] Turnstile unsolvable (attempt ${attempt + 1}/${MAX_RETRIES}), retrying...`);
-    if (attempt < MAX_RETRIES - 1) await new Promise(r => setTimeout(r, 2000));
-  }
-
-  return { success: false, error: 'Max retries exceeded for Turnstile', provider: 'captchasolv' };
+  return solveWithRetry(key, task, 'Turnstile');
 }
 
 /**
  * Solve hCaptcha via CaptchaSolv.
- * Free: 100 solves/day.
+ * Per docs: HCaptchaTaskProxyless
+ * Required: websiteURL, websiteKey
  */
 export async function solveHCaptcha(
   siteKey: string,
@@ -479,29 +567,17 @@ export async function solveHCaptcha(
   const key = API_KEY();
   if (!key) return { success: false, error: 'CAPTCHASOLV_API_KEY not set' };
 
-  const task = {
-    type: TASK_TYPES.HCAPTCHA,
-    websiteURL: pageUrl,
-    websiteKey: siteKey,
-  };
+  const task = { type: TASK_TYPES.HCAPTCHA, websiteURL: pageUrl, websiteKey: siteKey };
 
   console.log(`[CaptchaSolv] Solving hCaptcha for ${pageUrl.substring(0, 60)}...`);
-
-  for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
-    const result = await solveSync(key, task);
-    if (result.success) return result;
-    if (!RETRYABLE_ERRORS.has(result.errorCode || '')) return result;
-
-    console.warn(`[CaptchaSolv] hCaptcha unsolvable (attempt ${attempt + 1}/${MAX_RETRIES}), retrying...`);
-    if (attempt < MAX_RETRIES - 1) await new Promise(r => setTimeout(r, 2000));
-  }
-
-  return { success: false, error: 'Max retries exceeded for hCaptcha', provider: 'captchasolv' };
+  return solveWithRetry(key, task, 'hCaptcha');
 }
 
 /**
  * Solve GeeTest v4 via CaptchaSolv.
- * Free: 100 solves/day.
+ * Per docs: GeeTestV4TaskProxyless
+ * Required: websiteURL, websiteKey, captchaJs
+ * Optional: apiServers, staticServers
  */
 export async function solveGeeTestV4(
   websiteURL: string,
@@ -523,16 +599,7 @@ export async function solveGeeTestV4(
   if (staticServers) task.staticServers = staticServers;
 
   console.log(`[CaptchaSolv] Solving GeeTest v4 for ${websiteURL.substring(0, 60)}...`);
-
-  for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
-    const result = await solveSync(key, task);
-    if (result.success) return result;
-    if (!RETRYABLE_ERRORS.has(result.errorCode || '')) return result;
-
-    if (attempt < MAX_RETRIES - 1) await new Promise(r => setTimeout(r, 2000));
-  }
-
-  return { success: false, error: 'Max retries exceeded for GeeTest v4', provider: 'captchasolv' };
+  return solveWithRetry(key, task, 'GeeTest v4');
 }
 
 /**

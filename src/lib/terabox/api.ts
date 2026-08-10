@@ -25,7 +25,7 @@ const BASE_URLS = [
 ];
 let activeBaseUrl = BASE_URLS[0];
 const APP_ID = '250528';
-const PASS_VERSION_RECAPTCHA = '2.8';
+const PASS_VERSION_RECAPTCHA = '3.0'; // Updated: TeraBox now uses v3.0+ for reCAPTCHA Enterprise
 
 // ─── Types ───
 
@@ -282,10 +282,12 @@ export async function finishRegistration(
 }
 
 /**
- * Get the reCAPTCHA site key from TeraBox.
+ * Get the reCAPTCHA site key.
+ * Can be overridden via RECAPTCHA_SITE_KEY env var (in case TeraBox rotates it).
+ * Default: TeraBox's known site key for passport/signup flow.
  */
 export function getRecaptchaSiteKey(): string {
-  return '6LceASUfAAAAAHBcvTdvuPVie_9yzavGubPLOGTH';
+  return process.env.RECAPTCHA_SITE_KEY || '6LceASUfAAAAAHBcvTdvuPVie_9yzavGubPLOGTH';
 }
 
 /**

@@ -201,21 +201,41 @@ async function executeApiSignup(
     let sendResult = await sendVerificationCode(encryptedEmail, gIdentity, isEncrypted);
     steps.push(`sendcode: errno=${sendResult.errno}, ${sendResult.success ? 'OK' : sendResult.error}`);
 
-    // Step 3: Handle captcha if needed
+    // Step 3: Handle captcha with retry loop (up to 3 fresh solve attempts)
+    // Per CaptchaSolv docs: tokens expire in ~2 min, so each retry gets a fresh token
+    const MAX_CAPTCHA_RETRIES = 3;
     if (sendResult.needsCaptcha) {
       steps.push('reCAPTCHA required — attempting to solve...');
 
       if (isCaptchaConfigured()) {
         const siteKey = getRecaptchaSiteKey();
-        const captchaToken = await solveCaptchaForSignup(siteKey, referralLink);
 
-        if (captchaToken) {
-          gIdentity = captchaToken;
-          steps.push('Captcha solved — retrying sendcode...');
-          sendResult = await sendVerificationCode(encryptedEmail, gIdentity, isEncrypted);
-          steps.push(`sendcode retry: errno=${sendResult.errno}, ${sendResult.success ? 'OK' : sendResult.error}`);
-        } else {
-          steps.push('Captcha solving failed — no 2captcha key or solve failed');
+        for (let captchaAttempt = 0; captchaAttempt < MAX_CAPTCHA_RETRIES; captchaAttempt++) {
+          steps.push(`Captcha solve attempt ${captchaAttempt + 1}/${MAX_CAPTCHA_RETRIES}...`);
+          const captchaToken = await solveCaptchaForSignup(siteKey, referralLink);
+
+          if (captchaToken) {
+            gIdentity = captchaToken;
+            steps.push(`Captcha solved (${captchaToken.substring(0, 10)}...) — retrying sendcode...`);
+            sendResult = await sendVerificationCode(encryptedEmail, gIdentity, isEncrypted);
+            steps.push(`sendcode retry: errno=${sendResult.errno}, ${sendResult.success ? 'OK' : sendResult.error}`);
+
+            if (sendResult.success) {
+              steps.push('Captcha token accepted — OTP sent!');
+              break; // Captcha worked, move on
+            }
+
+            // Captcha was solved but TeraBox still rejected it (token expired? wrong type?)
+            if (sendResult.needsCaptcha) {
+              steps.push(`Token rejected (errno ${sendResult.errno}) — getting fresh token...`);
+              continue; // Try again with a fresh captcha solve
+            }
+
+            // Different error (not captcha) — stop retrying
+            break;
+          } else {
+            steps.push(`Captcha solve attempt ${captchaAttempt + 1} failed — ${captchaAttempt < MAX_CAPTCHA_RETRIES - 1 ? 'retrying...' : 'giving up'}`);
+          }
         }
       } else {
         steps.push('No CAPTCHASOLV_API_KEY — cannot solve captcha via API');
@@ -232,10 +252,10 @@ async function executeApiSignup(
     steps.push(`OTP sent! Token: ${apiToken.substring(0, 8)}...`);
     await log('success', 'API: OTP code sent to email', signupId, { retryPeriod: sendResult.retryPeriod });
 
-    // Step 4: Poll CatchMail.io for OTP email
+    // Step 4: Poll CatchMail.io for OTP email (adaptive: fast start, longer gaps later)
     steps.push('Polling CatchMail.io for verification email...');
     const pollStart = new Date();
-    const message = await pollForMessages(email, 60, 3000, pollStart);
+    const message = await pollForMessages(email, 70, 2500, pollStart); // 70 attempts × 2.5s = 175s
 
     if (!message) {
       steps.push('No verification email received within timeout');
@@ -269,7 +289,9 @@ async function executeApiSignup(
     steps.push(`verify: ${verifyResult.success ? 'OK' : verifyResult.error}`);
 
     if (!verifyResult.success) {
-      steps.push(`Verify error: ${verifyResult.error} (errno ${verifyResult.errno}) — continuing to finish`);
+      steps.push(`Verify FAILED: ${verifyResult.error} (errno ${verifyResult.errno}) — aborting registration`);
+      await log('warn', `OTP verify failed: ${verifyResult.error}`, signupId, { errno: verifyResult.errno });
+      return { success: false, error: `OTP verify failed: ${verifyResult.error}`, steps };
     }
 
     // Step 7: Set password and finish registration
@@ -307,7 +329,13 @@ async function solveCaptchaForSignup(siteKey: string, pageUrl: string): Promise<
     console.warn('[Engine] No captcha solver configured. Set CAPTCHASOLV_API_KEY (100 free/day)');
     return null;
   }
-  return solveRecaptcha(siteKey, pageUrl);
+  const startTime = Date.now();
+  const token = await solveRecaptcha(siteKey, pageUrl);
+  if (token) {
+    const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
+    console.log(`[Engine] Captcha solved in ${elapsed}s — token length: ${token.length}`);
+  }
+  return token;
 }
 
 // ─── Core Workflow ───
@@ -540,7 +568,7 @@ export async function executeSignup(referralLink: string): Promise<SignupResult>
 
     // ── Step 4: Poll CatchMail.io for verification email ──
     const pollStart = new Date();
-    const message = await pollForMessages(tempEmail.address, 60, 3000, pollStart);
+    const message = await pollForMessages(tempEmail.address, 70, 2500, pollStart);
 
     if (!message) {
       // Cleanup the browser context since we failed
