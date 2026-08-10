@@ -1,0 +1,83 @@
+[
+  {
+    "url": "https://github.com/saahiyo/terabox-gateway",
+    "name": "saahiyo/terabox-gateway: A lightweight Flask-based API",
+    "snippet": "TeraBox Gateway API. Fast Python gateway for extracting metadata, thumbnails, direct download links, and HLS streaming support from TeraBox share URLs.",
+    "host_name": "github.com",
+    "rank": 0,
+    "date": "",
+    "favicon": ""
+  },
+  {
+    "url": "https://apify.com/scraper-mind/terabox-downloader/api",
+    "name": "Terabox Video Downloader API API",
+    "snippet": "Learn how to interact with Terabox Video Downloader via API. Instantly generate direct download links, streaming URLs, and full metadata for any Terabox video ...",
+    "host_name": "apify.com",
+    "rank": 1,
+    "date": "",
+    "favicon": ""
+  },
+  {
+    "url": "https://xapiverse.com/apis/terabox",
+    "name": "TeraBox API - Details | API Marketplace",
+    "snippet": "The TeraBox API provides a powerful and programmatic way to interact with TeraBox file links. the data you need in a clean JSON format.",
+    "host_name": "xapiverse.com",
+    "rank": 2,
+    "date": "",
+    "favicon": ""
+  },
+  {
+    "url": "https://www.youtube.com/watch?v=hQb_nzlYlM4",
+    "name": "How to SHARE a Terabox REFERRAL LINK (Step by Step) 2026",
+    "snippet": "We are going to show you how to easily share your terrabox referral link so your friends can join and you can earn extra storage.",
+    "host_name": "www.youtube.com",
+    "rank": 3,
+    "date": "",
+    "favicon": ""
+  },
+  {
+    "url": "https://www.terabox.com/integrations/docs",
+    "name": "TeraBox Open Platform Integration Document",
+    "snippet": "TeraBox offers 1 tb free cloud storage & online file transfer. Login or Download TeraBox app to get 1 tb storage and use it on your PC, Mac, ...",
+    "host_name": "www.terabox.com",
+    "rank": 4,
+    "date": "",
+    "favicon": ""
+  },
+  {
+    "url": "https://rapidapi.com/ronok444/api/terabox-direct-download",
+    "name": "terabox direct download",
+    "snippet": "The API is designed to generate download links for files hosted on Terabox. It accepts a URL parameter containing the Terabox share link and returns a direct ...",
+    "host_name": "rapidapi.com",
+    "rank": 5,
+    "date": "",
+    "favicon": ""
+  },
+  {
+    "url": "https://blog.terabox.com/terabox-referral-success-updates",
+    "name": "TeraBox Referral Success & Program Updates",
+    "snippet": "TeraBox offers users the chance to earn big through the Referral Program. TeraBox offers three plans, share videos through the TeraBox link and ...",
+    "host_name": "blog.terabox.com",
+    "rank": 6,
+    "date": "Feb 1, 2024",
+    "favicon": ""
+  },
+  {
+    "url": "https://medium.com/@oladosuabdullaholatunde/unleash-the-power-of-sharing-terabox-referral-program-1efb0c245d2c",
+    "name": "Unleash the Power of Sharing: Terabox Referral Program",
+    "snippet": "Upon signing up for a Terabox account, users gain access to a personalized referral link. This link can be easily shared through various ...",
+    "host_name": "medium.com",
+    "rank": 7,
+    "date": "",
+    "favicon": ""
+  },
+  {
+    "url": "https://www.instagram.com/popular/terabox-direct-links",
+    "name": "Terabox Direct Links",
+    "snippet": "saahiyo/terabox-gateway provides a lightweight Flask API to extract direct download links from TeraBox share URLs.",
+    "host_name": "www.instagram.com",
+    "rank": 8,
+    "date": "Mar 22, 2026",
+    "favicon": ""
+  }
+]

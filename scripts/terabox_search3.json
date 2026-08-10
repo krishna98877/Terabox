@@ -1,0 +1,83 @@
+[
+  {
+    "url": "https://github.com/topics/terabox-downloader?l=python&o=asc&s=forks",
+    "name": "terabox-downloader",
+    "snippet": "TeraboxDL is a Python package for interacting with Terabox, enabling you to fetch file details such as name, download link, thumbnail, and size, and download ...",
+    "host_name": "github.com",
+    "rank": 0,
+    "date": "",
+    "favicon": ""
+  },
+  {
+    "url": "https://github.com/saahiyo/terabox-gateway",
+    "name": "saahiyo/terabox-gateway: A lightweight Flask-based API",
+    "snippet": "A lightweight Flask-based API and command-line client for extracting file information and direct download links from TeraBox share URLs.",
+    "host_name": "github.com",
+    "rank": 1,
+    "date": "",
+    "favicon": ""
+  },
+  {
+    "url": "https://gist.github.com/CypherpunkSamurai/58d8f2b669e101e893a6ecf3d3938412",
+    "name": "Reverse Engineering Terabox",
+    "snippet": "I tried to reverse engineer it but it redirects to about:blank, I am unable to overide such part of js i tried to find anti debugging parts of code but failed.",
+    "host_name": "gist.github.com",
+    "rank": 2,
+    "date": "",
+    "favicon": ""
+  },
+  {
+    "url": "https://github.com/Ronnie7866/terabox-downloader-online",
+    "name": "Ronnie7866/terabox-downloader-online",
+    "snippet": "This repository documents the backend API logic used to extract file information from TeraBox sharing URLs. TeraBox API - Spring Boot Implementation. A simple ...",
+    "host_name": "github.com",
+    "rank": 3,
+    "date": "",
+    "favicon": ""
+  },
+  {
+    "url": "https://github.com/topics/terabox-video-player",
+    "name": "terabox-video-player",
+    "snippet": "GitHub is where people build software. Here are 9 public repositories matching this topic... - Free Online Tool https://terabox-downloader.pro/ Download Terabox ...",
+    "host_name": "github.com",
+    "rank": 4,
+    "date": "",
+    "favicon": ""
+  },
+  {
+    "url": "http://codesandbox.io/p/github/mlbtheroku/terabox-app",
+    "name": "terabox-app",
+    "snippet": "Steps: 1. Download latest version of nodejs 2. Download this repo 3. Unzip and open terminal . You can check out the Next.js GitHub repository",
+    "host_name": "codesandbox.io",
+    "rank": 5,
+    "date": "",
+    "favicon": ""
+  },
+  {
+    "url": "https://github.com/topics/tera-box-api",
+    "name": "tera-box-api",
+    "snippet": "GitHub is where people build software. Add a description, image, and links to the tera-box-api topic page so that developers can more easily learn about it.",
+    "host_name": "github.com",
+    "rank": 6,
+    "date": "",
+    "favicon": ""
+  },
+  {
+    "url": "https://pkg.go.dev/github.com/coordinate/alist/drivers/terabox",
+    "name": "terabox package - github.com/coordinate/alist/drivers",
+    "snippet": "Modules with tagged versions give importers more predictable builds. Learn more about best practices Repository github.com/coordinate/alist ...",
+    "host_name": "pkg.go.dev",
+    "rank": 7,
+    "date": "Nov 28, 2024",
+    "favicon": ""
+  },
+  {
+    "url": "https://github.com/seiya-dev/terabox-node",
+    "name": "seiya-dev/terabox-node",
+    "snippet": "NodeJS tool for interacting with the TeraBox cloud service without the need to use the website or app ☁️ - seiya-dev/terabox-node.",
+    "host_name": "github.com",
+    "rank": 8,
+    "date": "",
+    "favicon": ""
+  }
+]

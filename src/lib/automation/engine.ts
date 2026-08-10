@@ -9,15 +9,19 @@
  * - Just pick any address @catchmail.io and poll for messages
  * - Much more reliable than Mail.tm (which requires account + token management)
  *
- * API Flow (preferred):
- * 1. Create temp email via CatchMail.io (just pick random@catchmail.io)
- * 2. POST /passport/register_v4/sendcode → send OTP to email
- * 3. If captcha required: solve via 2captcha → retry with g_identity
- * 4. Poll CatchMail.io inbox for OTP email
- * 5. POST /passport/register_v4/verify → verify OTP
- * 6. POST /passport/register_v4/finish → set password, complete
- * 7. Visit referral link (to register referral tracking)
- * 8. Cleanup
+ * API Flow (preferred) — WITH REFERRAL TRACKING:
+ * 1. Visit share link FIRST (sets referral cookies)
+ * 2. GET /api/shorturlinfo → get shareid, uk, sign for the shared file
+ * 3. Create temp email via CatchMail.io
+ * 4. POST /passport/register_v4/sendcode → send OTP to email
+ * 5. If captcha required: solve via NoCaptchaAI → retry with g_identity
+ * 6. Poll CatchMail.io inbox for OTP email
+ * 7. POST /passport/register_v4/verify → verify OTP
+ * 8. POST /passport/register_v4/finish → set password, complete
+ * 9. POST /passport/login → get bdstoken (auth token)
+ * 10. POST /share/transfer → save shared file → REFERRAL CREDIT!
+ * 11. POST /api/analytics → track view/download
+ * 12. Cleanup
  *
  * Browser Flow (fallback):
  * 1. Open referral link → Login → Sign Up → Email icon → Fill email → Continue
@@ -52,6 +56,13 @@ import {
   encodePassword,
   encryptEmail,
   getRecaptchaSiteKey,
+  getShareInfo,
+  loginToTerabox,
+  shareTransfer,
+  trackAnalytics,
+  reportUserActivity,
+  extractSurlFromLink,
+  visitShareLink,
 } from '@/lib/terabox/api';
 import type { ProxyInfo } from '@/lib/proxy';
 import { isCaptchaConfigured, solveRecaptcha } from '@/lib/captcha';
@@ -350,6 +361,16 @@ export async function executeSignup(referralLink: string): Promise<SignupResult>
 
     await log('success', `Temp email created: ${tempEmail.address}`, signup.id);
 
+    // ── Step 1.5: Visit share link FIRST to set referral tracking cookies ──
+    // This is CRITICAL — the referral must be tracked BEFORE the signup,
+    // so TeraBox attributes the new account to the referrer.
+    try {
+      const visitResult = await visitShareLink(referralLink);
+      await log('info', `Share link visited (referral tracking): ${visitResult.success ? 'OK' : visitResult.error}`, signup.id);
+    } catch (visitErr) {
+      await log('warn', `Share link visit failed: ${(visitErr as Error).message}`, signup.id);
+    }
+
     // ── Step 2: Try API-first signup (TeraBox Passport API) ──
     // Always try API first — sendcode sometimes works without captcha.
     // If captcha required (errno 400090/460030), falls back to browser.
@@ -360,7 +381,7 @@ export async function executeSignup(referralLink: string): Promise<SignupResult>
     await log('info', `API signup result: ${apiResult.success ? 'SUCCESS' : apiResult.error}`, signup.id, { steps: apiResult.steps?.slice(-5) });
 
     if (apiResult?.success) {
-      // API signup succeeded — mark verified, cleanup, done
+      // API signup succeeded — now do the REFERRAL TRACKING flow
       await db.signupRecord.update({
         where: { id: signup.id },
         data: {
@@ -371,16 +392,82 @@ export async function executeSignup(referralLink: string): Promise<SignupResult>
       });
       await log('success', `API signup SUCCESS: ${tempEmail.address}`, signup.id, { password: apiResult.password ? 'set' : 'none' });
 
-      // Visit referral link to register the referral tracking
+      // ── REFERRAL TRACKING FLOW ──
+      // This is the key sequence that converts a signup into a referral credit:
+      // 1. Get share info (shareid, uk)
+      // 2. Login with new account
+      // 3. Transfer (save) shared file → triggers referral
+      // 4. Track analytics
+      const referralSteps: string[] = [];
       try {
-        await fetch(referralLink, {
-          headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' },
-          redirect: 'follow',
-          signal: AbortSignal.timeout(10000),
-          cache: 'no-store',
-        });
-        await log('info', 'Referral link visited for tracking', signup.id);
-      } catch {}
+        const surl = extractSurlFromLink(referralLink);
+        if (surl) {
+          referralSteps.push(`surl: ${surl}`);
+
+          // Step A: Get share info
+          const shareInfo = await getShareInfo(surl);
+          referralSteps.push(`shareInfo: ${shareInfo.success ? 'OK' : shareInfo.error}`);
+
+          if (shareInfo.success && shareInfo.shareid && shareInfo.uk) {
+            // Step B: Login to get auth token
+            const pubkey = await getPubKey();
+            const loginResult = await loginToTerabox(
+              tempEmail.address,
+              apiResult.password || '',
+              pubkey?.pubkey
+            );
+            referralSteps.push(`login: ${loginResult.success ? 'OK' : loginResult.error}`);
+
+            if (loginResult.success && loginResult.bdstoken) {
+              // Step C: ★★★ SHARE TRANSFER — THE KEY API ★★★
+              // This saves the shared file to the new user's account
+              // which triggers the referral attribution in TeraBox's backend
+              const firstFile = shareInfo.files?.[0];
+              const transferResult = await shareTransfer({
+                shareid: shareInfo.shareid,
+                from: shareInfo.uk,
+                bdstoken: loginResult.bdstoken,
+                sekey: shareInfo.sign ? `${shareInfo.sign}` : undefined,
+                path: firstFile?.path || '/',
+                fs_id: String(firstFile?.fs_id || ''),
+                dir: '/',
+              });
+              referralSteps.push(`transfer: ${transferResult.success ? '★★★ REFERRAL CREDIT! ★★★' : transferResult.error}`);
+
+              if (transferResult.success) {
+                await log('success', '★★★ REFERRAL TRANSFER SUCCESS — credit should be counted! ★★★', signup.id);
+              } else {
+                await log('warn', `Share transfer failed: ${transferResult.error}`, signup.id, { errno: transferResult.errno });
+              }
+
+              // Step D: Track analytics (count as view + download)
+              await trackAnalytics('share_file_save', referralLink);
+              await trackAnalytics('share_file_download', referralLink);
+              await reportUserActivity(loginResult.bdstoken);
+              referralSteps.push('analytics: tracked');
+            } else {
+              await log('warn', `Login failed for referral transfer: ${loginResult.error}`, signup.id);
+              // Still try to visit the link as fallback
+              await visitShareLink(referralLink);
+              referralSteps.push('fallback: visited share link');
+            }
+          } else {
+            await log('warn', `Share info failed: ${shareInfo.error}`, signup.id);
+            // Fallback: just visit the link
+            await visitShareLink(referralLink);
+            referralSteps.push('fallback: visited share link');
+          }
+        } else {
+          // No surl extracted — just visit the link
+          await visitShareLink(referralLink);
+          referralSteps.push('fallback: no surl, visited link');
+        }
+      } catch (refErr) {
+        await log('warn', `Referral tracking error: ${(refErr as Error).message}`, signup.id);
+        // Fallback: visit link directly
+        try { await visitShareLink(referralLink); } catch {}
+        referralSteps.push('error fallback: visited link');
+      }
 
       if (proxy) markProxySuccess(proxy.url);
 
@@ -392,7 +479,7 @@ export async function executeSignup(referralLink: string): Promise<SignupResult>
         signupId: signup.id,
         proxyUsed: proxy?.url,
         password: apiResult.password,
-        steps: apiResult.steps,
+        steps: [...(apiResult.steps || []), '--- REFERRAL TRACKING ---', ...referralSteps],
       };
     }
 

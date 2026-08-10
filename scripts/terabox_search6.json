@@ -1,0 +1,83 @@
+[
+  {
+    "url": "https://github.com/topics/terabox-downloader?l=python&o=asc&s=forks",
+    "name": "terabox-downloader",
+    "snippet": "TeraboxDL is a Python package for interacting with Terabox, enabling you to fetch file details such as name, download link, thumbnail, and size, and download ...",
+    "host_name": "github.com",
+    "rank": 0,
+    "date": "",
+    "favicon": ""
+  },
+  {
+    "url": "https://github.com/saahiyo/terabox-gateway",
+    "name": "saahiyo/terabox-gateway: A lightweight Flask-based API",
+    "snippet": "A lightweight Flask-based API and command-line client for extracting file information and direct download links from TeraBox share URLs.",
+    "host_name": "github.com",
+    "rank": 1,
+    "date": "",
+    "favicon": ""
+  },
+  {
+    "url": "https://pypi.org/project/terabox-downloader",
+    "name": "terabox-downloader",
+    "snippet": "TeraboxDL is a Python package for interacting with Terabox, enabling you to fetch file details such as name, download link, thumbnail, and size, and download ...",
+    "host_name": "pypi.org",
+    "rank": 2,
+    "date": "",
+    "favicon": ""
+  },
+  {
+    "url": "https://github.com/topics/terabox-downloader-bot",
+    "name": "terabox-downloader-bot",
+    "snippet": "TeraBox Downloader is a convenient utility designed to simplify and accelerate file downloads from cloud storage links. The program allows you to easily ...",
+    "host_name": "github.com",
+    "rank": 3,
+    "date": "",
+    "favicon": ""
+  },
+  {
+    "url": "https://stackoverflow.com/questions/78113499/how-to-download-from-terabox-by-terabox-api-with-python",
+    "name": "How to Download From Terabox by Terabox api with Python?",
+    "snippet": "You can use https://teradownloader.com website to download terabox files , I am using this website, this is the only website that supports ...",
+    "host_name": "stackoverflow.com",
+    "rank": 4,
+    "date": "",
+    "favicon": ""
+  },
+  {
+    "url": "https://www.kaggle.com/code/priteshjha45/terabox-upload-and-download-api-using-python",
+    "name": "TeraBox upload and download API using python",
+    "snippet": "TeraBox upload and download API using python. Step 1: Add your Terabox cookie cookie. Step 2: Create the client terabox =. Provide a file link link. Fetch file ...",
+    "host_name": "www.kaggle.com",
+    "rank": 5,
+    "date": "",
+    "favicon": ""
+  },
+  {
+    "url": "https://github.com/abhinai2244/TeraBox-Dl",
+    "name": "️ TeraBox Downloader API",
+    "snippet": "A fast, lightweight, and efficient TeraBox direct download link generator API. Easily fetch file details, thumbnails, and direct download links seamlessly! ...",
+    "host_name": "github.com",
+    "rank": 6,
+    "date": "",
+    "favicon": ""
+  },
+  {
+    "url": "https://dev.to/damanthajasinghe/how-to-download-files-from-terabox-with-python-3ii0",
+    "name": "🚀How to Download files from Terabox with Python",
+    "snippet": "Get direct download links from Terabox. · View file name, size, and thumbnail. · Download files to any folder. · Add a built-in or ...",
+    "host_name": "dev.to",
+    "rank": 7,
+    "date": "Apr 11, 2025",
+    "favicon": ""
+  },
+  {
+    "url": "https://github.com/topics/tera-box-api",
+    "name": "tera-box-api",
+    "snippet": "Add this topic to your repo. To associate your repository with the tera-box-api topic, visit your repo's landing page and select \"manage topics.\".",
+    "host_name": "github.com",
+    "rank": 8,
+    "date": "",
+    "favicon": ""
+  }
+]

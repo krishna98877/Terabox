@@ -1,0 +1,83 @@
+[
+  {
+    "url": "https://gist.github.com/CypherpunkSamurai/58d8f2b669e101e893a6ecf3d3938412",
+    "name": "Reverse Engineering Terabox",
+    "snippet": "I just need a client_id/app_id to use the Terabox API. I cannot find the section where i can register a new app Thanks, appreciated client id and app id are ...",
+    "host_name": "gist.github.com",
+    "rank": 0,
+    "date": "",
+    "favicon": ""
+  },
+  {
+    "url": "https://www.youtube.com/watch?v=RchCi6E2hVs",
+    "name": "How To: Reverse Engineer Any Private API (iOS/Android and",
+    "snippet": "In this video I demonstrate a simple step by step tutorial on how to connect to and create requests to any Private API on iOS, macOS, Android, ...",
+    "host_name": "www.youtube.com",
+    "rank": 1,
+    "date": "",
+    "favicon": ""
+  },
+  {
+    "url": "https://medium.com/better-practices/reverse-engineering-an-api-403fae885303",
+    "name": "Reverse engineering an API",
+    "snippet": "Reverse engineering, also called back engineering, is the process by which a man-made object is deconstructed to reveal its designs, ...",
+    "host_name": "medium.com",
+    "rank": 2,
+    "date": "",
+    "favicon": ""
+  },
+  {
+    "url": "https://www.reddit.com/r/learnpython/comments/11srgm9/how_to_reverse_engineer_a_3rd_party_applications",
+    "name": "How to Reverse Engineer a 3rd Party Application's API?",
+    "snippet": "You mentioned reverse engineering an API that charges you to use the official SDK, suggesting you are trying to bypass paying for the service, ...",
+    "host_name": "www.reddit.com",
+    "rank": 3,
+    "date": "",
+    "favicon": ""
+  },
+  {
+    "url": "https://stackoverflow.com/questions/19908814/reverse-engineer-a-private-restful-api",
+    "name": "Reverse-engineer a private RESTful API?",
+    "snippet": "Is there a way to reverse-engineer a private RESTful API? Say, I have a website that uses this API, and I was able to figure out some access point urls ...",
+    "host_name": "stackoverflow.com",
+    "rank": 4,
+    "date": "",
+    "favicon": ""
+  },
+  {
+    "url": "https://www.youtube.com/watch?v=UcdmlOYc-gg",
+    "name": "Scraping Secret Sauce: Reverse Engineering API",
+    "snippet": "In this video, we're going to dive deeper into scraping using Reverse Engineering API 00:00:00 - Introduction 00:01:05 - Scraping Scenario ...",
+    "host_name": "www.youtube.com",
+    "rank": 5,
+    "date": "",
+    "favicon": ""
+  },
+  {
+    "url": "https://reverseengineering.stackexchange.com/questions/27057/finding-rest-api-urls-after-decompiling-apk",
+    "name": "finding rest api urls after decompiling apk",
+    "snippet": "i have two apk files , when i decompile them using apktool i can take a look at decompile code , so here is what really confuse me , in the first ...",
+    "host_name": "reverseengineering.stackexchange.com",
+    "rank": 6,
+    "date": "Feb 20, 2021",
+    "favicon": ""
+  },
+  {
+    "url": "https://yasoob.me/posts/reverse-engineering-android-apps-apktool",
+    "name": "Let's Reverse Engineer an Android App!",
+    "snippet": "In this post, I will show you how I was able to reverse engineer an Android app, add some debug statements, and figure out how certain query ...",
+    "host_name": "yasoob.me",
+    "rank": 7,
+    "date": "Jun 22, 2020",
+    "favicon": ""
+  },
+  {
+    "url": "https://www.corellium.com/blog/android-mobile-reverse-engineering",
+    "name": "Intro to Android Mobile Reverse Engineering",
+    "snippet": "Reverse engineering Android mobile apps requires tools, like JDAX, to decompile the application's code & resources into a human-readable ...",
+    "host_name": "www.corellium.com",
+    "rank": 8,
+    "date": "Mar 28, 2025",
+    "favicon": ""
+  }
+]

@@ -1,0 +1,83 @@
+[
+  {
+    "url": "https://www.youtube.com/watch?v=iw-okA1Xc5s",
+    "name": "TeraBox EXPOSED: The Hidden Cost of 1TB Free Storage",
+    "snippet": "In this TeraBox review, I'll cover the 1TB free plan, what the real catch is and why you may want to look for another cloud storage service.",
+    "host_name": "www.youtube.com",
+    "rank": 0,
+    "date": "",
+    "favicon": ""
+  },
+  {
+    "url": "https://www.instagram.com/reel/DbGOC6BRQuu",
+    "name": "Why use 5 different apps when one can do it all? TeraBox Al",
+    "snippet": "instantly generate shareable links all in one place. Plus, it comes with 1TB of free cloud storage, you get 1024GB of free cloud storage",
+    "host_name": "www.instagram.com",
+    "rank": 1,
+    "date": "Jul 27, 2026",
+    "favicon": ""
+  },
+  {
+    "url": "https://www.reddit.com/r/cloudstorage/comments/1djxkss/avoid_terabox_other_massive_free_providers",
+    "name": "Avoid Terabox + Other \"massive free\" providers",
+    "snippet": "Lack of APIs * up with referral link, Terabox displays a large number of advertisements and generates more revenue than the cost of storage. ...",
+    "host_name": "www.reddit.com",
+    "rank": 2,
+    "date": "",
+    "favicon": ""
+  },
+  {
+    "url": "https://play.google.com/store/apps/details?id=com.dubox.drive&hl=en_US",
+    "name": "TeraBox: 1TB Cloud & AI Space - Apps on Google Play",
+    "snippet": "TeraBox: Your Personal All-in-One AI Assistant with 1024GB of FREE Cloud Storage! TeraBox is more than just cloud storage — it's your smart AI assistant.",
+    "host_name": "play.google.com",
+    "rank": 3,
+    "date": "",
+    "favicon": ""
+  },
+  {
+    "url": "https://github.com/saahiyo/terabox-gateway",
+    "name": "saahiyo/terabox-gateway: A lightweight Flask-based API",
+    "snippet": "A lightweight Flask-based API and command-line client for extracting file information and direct download links from TeraBox share URLs.",
+    "host_name": "github.com",
+    "rank": 4,
+    "date": "",
+    "favicon": ""
+  },
+  {
+    "url": "https://blog.terabox.com/terabox-referral-success-updates",
+    "name": "TeraBox Referral Success & Program Updates",
+    "snippet": "share videos through the TeraBox link and get as many plays as possible, earning $1.3 per 1000 views. Receive bonuses from ad displays and earn ...",
+    "host_name": "blog.terabox.com",
+    "rank": 5,
+    "date": "Feb 1, 2024",
+    "favicon": ""
+  },
+  {
+    "url": "https://enmobile.prnasia.com/releases/apac/terabox-rolls-out-referral-program-global-users-can-receive-2-000gb-of-free-storage-363485.shtml",
+    "name": "TeraBox Rolls Out Referral Program; Global Users Can",
+    "snippet": "TeraBox users can redeem up to 2,000GB in free cloud storage, valid for 180 days, in addition to the 1,024GB (1TB) of free cloud storage ...",
+    "host_name": "enmobile.prnasia.com",
+    "rank": 6,
+    "date": "Jun 1, 2022",
+    "favicon": ""
+  },
+  {
+    "url": "https://www.youtube.com/watch?v=7Djpwvl7XNI",
+    "name": "Terabox - Lesson 10 - Sharing Files with Others Via Link",
+    "snippet": "If you want to go ahead and share out files with others then one way to share out files is by using a link.",
+    "host_name": "www.youtube.com",
+    "rank": 7,
+    "date": "",
+    "favicon": ""
+  },
+  {
+    "url": "https://apify.com/easyapi/terabox-video-file-downloader/api/openapi",
+    "name": "TeraBox Video/File Downloader 🎥 OpenAPI definition",
+    "snippet": "Extract direct download links from TeraBox video sharing URLs. Get fast download links, file details, and metadata for TeraBox shared videos automatically.",
+    "host_name": "apify.com",
+    "rank": 8,
+    "date": "",
+    "favicon": ""
+  }
+]

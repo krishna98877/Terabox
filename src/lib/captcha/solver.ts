@@ -15,7 +15,7 @@
  */
 
 import { solveRecaptchaV2 as noCaptchaSolveV2, solveRecaptchaV3 as noCaptchaSolveV3, solveTurnstile as noCaptchaSolveTurnstile, solveImageCaptcha as noCaptchaSolveImage, isConfigured as isNoCaptchaConfigured, getBalance as noCaptchaGetBalance } from './nocaptchaai';
-import { solveRecaptchaV2 as twoCaptchaSolveV2, solveRecaptchaV3 as twoCaptchaSolveV3, solveTurnstile as twoCaptchaSolveTurnstile, solveImageCaptcha as twoCaptchaSolveImage, isConfigured as is2CaptchaConfigured, getBalance as twoCaptchaGetBalance } from './twocaptcha';
+import { solveRecaptchaV2 as twoCaptchaSolveV2, solveRecaptchaV3 as twoCaptchaSolveV3, solveTurnstile as twoCaptchaSolveTurnstile, solveImageCaptcha as twoCaptchaSolveImage, isConfigured as is2CaptchaInternalConfigured, getBalance as twoCaptchaGetBalance } from './twocaptcha';
 
 // ─── Types ───
 
@@ -38,12 +38,12 @@ export interface SolveResult {
 // ─── Provider Detection ───
 
 export function isCaptchaConfigured(): boolean {
-  return isNoCaptchaConfigured() || is2CaptchaConfigured();
+  return isNoCaptchaConfigured() || is2CaptchaInternalConfigured();
 }
 
 export function getActiveProvider(): 'nocaptchaai' | '2captcha' | null {
   if (isNoCaptchaConfigured()) return 'nocaptchaai';
-  if (is2CaptchaConfigured()) return '2captcha';
+  if (is2CaptchaInternalConfigured()) return '2captcha';
   return null;
 }
 
@@ -62,7 +62,7 @@ export async function solveRecaptchaV2(
   }
 
   // Fallback to 2captcha
-  if (is2CaptchaConfigured()) {
+  if (is2CaptchaInternalConfigured()) {
     const result = await twoCaptchaSolveV2(siteKey, pageUrl, invisible);
     if (result.success) return { ...result, provider: '2captcha' };
   }
@@ -84,7 +84,7 @@ export async function solveRecaptchaV3(
     console.warn(`[Captcha] NoCaptchaAI v3 failed: ${result.error} — trying 2captcha`);
   }
 
-  if (is2CaptchaConfigured()) {
+  if (is2CaptchaInternalConfigured()) {
     const result = await twoCaptchaSolveV3(siteKey, pageUrl, minScore, action);
     if (result.success) return { ...result, provider: '2captcha' };
   }
@@ -103,7 +103,7 @@ export async function solveTurnstile(
     if (result.success) return { ...result, provider: 'nocaptchaai' };
   }
 
-  if (is2CaptchaConfigured()) {
+  if (is2CaptchaInternalConfigured()) {
     const result = await twoCaptchaSolveTurnstile(siteKey, pageUrl);
     if (result.success) return { ...result, provider: '2captcha' };
   }
@@ -122,7 +122,7 @@ export async function solveImageCaptcha(
     if (result.success) return { ...result, provider: 'nocaptchaai' };
   }
 
-  if (is2CaptchaConfigured()) {
+  if (is2CaptchaInternalConfigured()) {
     const result = await twoCaptchaSolveImage(imageBase64, options);
     if (result.success) return { ...result, provider: '2captcha' };
   }
