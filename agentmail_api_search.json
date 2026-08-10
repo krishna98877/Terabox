@@ -1,0 +1,92 @@
+[
+  {
+    "url": "https://www.agentmail.to/docs/quickstart",
+    "name": "Quickstart | AgentMail | Documentation",
+    "snippet": "Follow this guide to make your first AgentMail API request and create a new email inbox. The agent registers itself using an email you provide and receives an  ...",
+    "host_name": "www.agentmail.to",
+    "rank": 0,
+    "date": "",
+    "favicon": ""
+  },
+  {
+    "url": "https://www.agentmail.to/docs/messages",
+    "name": "Messages | AgentMail | Documentation",
+    "snippet": "List Messages in an Inbox. You can retrieve a list of all Messages within a specific Inbox . This is useful for getting a history of all correspondence ...",
+    "host_name": "www.agentmail.to",
+    "rank": 1,
+    "date": "",
+    "favicon": ""
+  },
+  {
+    "url": "https://www.agentmail.to/blog/best-inbound-email-apis-ai-agents",
+    "name": "Best Email APIs for Receiving and Parsing Replies in AI Agents (2026)",
+    "snippet": "Jul 28, 2026 · AgentMail is the best inbound email API when each AI agent needs its own managed inbox, parsed reply content, thread state, and an in-thread ...",
+    "host_name": "www.agentmail.to",
+    "rank": 2,
+    "date": "",
+    "favicon": ""
+  },
+  {
+    "url": "https://www.agentmail.to",
+    "name": "AgentMail | Email Inbox API for AI Agents",
+    "snippet": "AgentMail gives AI agents real email inboxes. Create, send, receive, and search messages via REST API — built for autonomous agents and agentic workflows.",
+    "host_name": "www.agentmail.to",
+    "rank": 3,
+    "date": "",
+    "favicon": ""
+  },
+  {
+    "url": "https://www.agentmail.to/blog/best-email-api-for-ai-agents-2026",
+    "name": "The Best Email API for AI Agents in 2026: 7 Options Compared",
+    "snippet": "Jul 24, 2026 · Eight email APIs grouped into five categories. Which one fits which agent shape, and why AgentMail sits in its own category.",
+    "host_name": "www.agentmail.to",
+    "rank": 4,
+    "date": "",
+    "favicon": ""
+  },
+  {
+    "url": "https://shipmail.to/blog/email-api-for-ai-agents",
+    "name": "Best Email API for AI Agents with REST and MCP - Shipmail",
+    "snippet": "Jun 19, 2026 · Shipmail is a business email provider with a REST API. An agent can get its own custom-domain mailbox, then send email, read inbound messages, ...",
+    "host_name": "shipmail.to",
+    "rank": 5,
+    "date": "",
+    "favicon": ""
+  },
+  {
+    "url": "https://www.reddit.com/r/mcp/comments/1rrt2qz/agentmail_agentmail_is_the_email_inbox_api_for_ai",
+    "name": "AgentMail is the email inbox API for AI agents. It gives  - Reddit",
+    "snippet": "Mar 12, 2026 · AgentMail is the email inbox API for AI agents. It gives agents their own email inboxes, like Gmail. List inboxes list_threads",
+    "host_name": "www.reddit.com",
+    "rank": 6,
+    "date": "",
+    "favicon": ""
+  },
+  {
+    "url": "https://www.mailforge.ai/blog/agentmail-api",
+    "name": "AgentMail API: Here's Everything You Need To Know - Mailforge",
+    "snippet": "Jan 29, 2026 · AgentMail API lets AI agents create inboxes and work with emails. ... You start by creating an inbox using a username and a domain. Once the inbox ...",
+    "host_name": "www.mailforge.ai",
+    "rank": 7,
+    "date": "",
+    "favicon": ""
+  },
+  {
+    "url": "https://www.agentmail.to/docs/api-reference/inboxes/lists/list",
+    "name": "List Entries | AgentMail | Documentation",
+    "snippet": "Jan 15, 2024 · Documentation API Reference Knowledge Base Changelog · API Reference. Agent. Inboxes. GETList Inboxes · GETGet Inbox · POSTCreate Inbox · PATCH ...",
+    "host_name": "www.agentmail.to",
+    "rank": 8,
+    "date": "",
+    "favicon": ""
+  },
+  {
+    "url": "https://www.agentmail.to/blog/building-real-time-ai-agents-agentmail-webhooks",
+    "name": "Building real-time AI agents with AgentMail webhooks",
+    "snippet": "Jul 15, 2026 · AgentMail gives your agents real inboxes. Create inboxes via API. Send and receive Emails with 0 complexity. Free to start. Get StartedRead the ...",
+    "host_name": "www.agentmail.to",
+    "rank": 9,
+    "date": "",
+    "favicon": ""
+  }
+]
