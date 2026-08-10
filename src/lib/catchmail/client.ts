@@ -14,7 +14,7 @@
  */
 
 const BASE_URL = 'https://api.catchmail.io';
-const DEFAULT_DOMAIN = 'catchmail.io';
+const DEFAULT_DOMAINS = ['catchmail.io', 'mailistry.com', 'zeppost.com'];
 const TIMEOUT = 25000;
 
 // ─── Types ───
@@ -178,7 +178,14 @@ export async function createTempEmail(): Promise<{
     'abcdefghijklmnopqrstuvwxyz0123456789'[Math.floor(Math.random() * 36)]
   ).join('');
 
-  const address = `${username}@${DEFAULT_DOMAIN}`;
+  // Rotate through available domains to avoid blocking
+  const customDomain = process.env.CATCHMAIL_CUSTOM_DOMAIN;
+  const allDomains = customDomain
+    ? [customDomain, ...DEFAULT_DOMAINS]
+    : DEFAULT_DOMAINS;
+  const domain = allDomains[Math.floor(Math.random() * allDomains.length)];
+
+  const address = `${username}@${domain}`;
 
   console.log(`[CatchMail] Created temp email: ${address} (no API call needed)`);
 
@@ -195,13 +202,11 @@ export async function createTempEmail(): Promise<{
  * Also supports custom domains if configured via MX records.
  */
 export async function getDomains(): Promise<string[]> {
-  // CatchMail.io always supports catchmail.io domain
-  // Custom domains can be added via DNS MX records
   const customDomain = process.env.CATCHMAIL_CUSTOM_DOMAIN;
   if (customDomain) {
-    return [DEFAULT_DOMAIN, customDomain];
+    return [customDomain, ...DEFAULT_DOMAINS];
   }
-  return [DEFAULT_DOMAIN];
+  return DEFAULT_DOMAINS;
 }
 
 /**

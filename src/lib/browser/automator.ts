@@ -23,6 +23,7 @@
  */
 
 import puppeteerCore from 'puppeteer-core';
+import { is2CaptchaConfigured, solveRecaptchaV2, solveRecaptchaV3, solveTurnstile } from '@/lib/captcha';
 
 // ─── Types ───
 
@@ -58,8 +59,7 @@ let _launchPromise: Promise<AnyBrowser> | null = null;
 let _currentProxy: string | null = null;
 
 // ─── Captcha Config ───
-
-const TWOCAPTCHA_KEY = process.env.TWOCAPTCHA_API_KEY || '';
+// Uses @/lib/captcha (direct 2captcha API) — no npm package dependency
 
 // ─── Strategy Detection ───
 
@@ -282,45 +282,52 @@ async function handleRecaptcha(page: AnyPage, steps: string[]): Promise<boolean>
 
   steps.push('reCAPTCHA detected — attempting to solve...');
 
-  // Strategy 1: Try 2captcha service
-  if (TWOCAPTCHA_KEY) {
+  // Strategy 1: Try 2captcha service (direct API)
+  if (is2CaptchaConfigured()) {
     try {
-      steps.push('Using 2captcha service...');
+      steps.push('Using 2captcha service (direct API)...');
       const siteKey = await page.evaluate(() => {
         const iframe = document.querySelector('#robot iframe') as HTMLIFrameElement;
         if (iframe) {
           const url = new URL(iframe.src);
           return url.searchParams.get('k');
         }
+        // Also check for data-sitekey attribute
+        const siteKeyEl = document.querySelector('[data-sitekey]');
+        if (siteKeyEl) return siteKeyEl.getAttribute('data-sitekey');
         return null;
       });
 
       if (siteKey) {
-        const solverMod = await import('@2captcha/captcha-solver');
-        const solver = new (solverMod as any).default(TWOCAPTCHA_KEY);
-        const res = await solver.recaptcha({
-          sitekey: siteKey,
-          pageurl: page.url(),
-          enterprise: true,
-        });
+        // Try reCAPTCHA v2 first
+        const v2Result = await solveRecaptchaV2(siteKey, page.url());
+        let token = v2Result.success ? v2Result.solution?.gRecaptchaResponse : null;
 
-        if (res.data) {
-          await page.evaluate((token: string) => {
+        // If v2 fails, try v3
+        if (!token) {
+          const v3Result = await solveRecaptchaV3(siteKey, page.url(), 0.3, 'register');
+          token = v3Result.success ? v3Result.solution?.gRecaptchaResponse : null;
+        }
+
+        if (token) {
+          await page.evaluate((t: string) => {
             const textarea = document.querySelector('#g-recaptcha-response') as HTMLTextAreaElement;
             if (textarea) {
-              textarea.value = token;
+              textarea.value = t;
               textarea.dispatchEvent(new Event('input', { bubbles: true }));
             }
             // Try callback
             const successCallback = (window as any).___grecaptcha_cfg?.clients?.['0']?.callback;
             if (typeof successCallback === 'function') {
-              successCallback(token);
+              successCallback(t);
             }
-          }, res.data);
+          }, token);
           steps.push('2captcha solution injected');
           await sleep(3000);
           return true;
         }
+      } else {
+        steps.push('Could not extract reCAPTCHA sitekey from page');
       }
     } catch (err) {
       steps.push(`2captcha failed: ${(err as Error).message?.substring(0, 80)}`);

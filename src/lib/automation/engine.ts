@@ -54,6 +54,7 @@ import {
   getRecaptchaSiteKey,
 } from '@/lib/terabox/api';
 import type { ProxyInfo } from '@/lib/proxy';
+import { is2CaptchaConfigured, solveRecaptchaV2, solveRecaptchaV3 } from '@/lib/captcha';
 
 // ─── Types ───
 
@@ -193,7 +194,7 @@ async function executeApiSignup(
     if (sendResult.needsCaptcha) {
       steps.push('reCAPTCHA required — attempting to solve...');
 
-      if (TWOCAPTCHA_KEY) {
+      if (is2CaptchaConfigured()) {
         const siteKey = getRecaptchaSiteKey();
         const captchaToken = await solveRecaptcha(siteKey, referralLink);
 
@@ -288,24 +289,28 @@ function generateApiPassword(length = 14): string {
   return Array.from({ length }, () => c[Math.floor(Math.random() * c.length)]).join('');
 }
 
-// ─── Captcha Solving via 2captcha ───
-
-const TWOCAPTCHA_KEY = process.env.TWOCAPTCHA_API_KEY || '';
+// ─── Captcha Solving via 2captcha (direct API — no npm pkg dependency) ───
 
 async function solveRecaptcha(siteKey: string, pageUrl: string): Promise<string | null> {
-  if (!TWOCAPTCHA_KEY) {
+  if (!is2CaptchaConfigured()) {
     console.warn('[Engine] TWOCAPTCHA_API_KEY not set — cannot solve captcha');
     return null;
   }
   try {
-    const solverMod = await import('@2captcha/captcha-solver');
-    const solver = new (solverMod as any).default(TWOCAPTCHA_KEY);
-    const res = await solver.recaptcha({
-      sitekey: siteKey,
-      pageurl: pageUrl,
-      enterprise: true,
-    });
-    return res.data || null;
+    // Try reCAPTCHA v2 first (most common for TeraBox)
+    const result = await solveRecaptchaV2(siteKey, pageUrl);
+    if (result.success && result.solution?.gRecaptchaResponse) {
+      return result.solution.gRecaptchaResponse;
+    }
+
+    // If v2 fails, try v3 with low score threshold
+    const v3Result = await solveRecaptchaV3(siteKey, pageUrl, 0.3, 'register');
+    if (v3Result.success && v3Result.solution?.gRecaptchaResponse) {
+      return v3Result.solution.gRecaptchaResponse;
+    }
+
+    console.error('[Engine] 2captcha both v2 and v3 failed:', result.error, v3Result.error);
+    return null;
   } catch (err) {
     console.error('[Engine] 2captcha solve failed:', (err as Error).message);
     return null;

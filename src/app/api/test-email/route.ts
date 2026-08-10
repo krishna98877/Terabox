@@ -2,169 +2,176 @@ import { NextResponse } from 'next/server';
 
 export const dynamic = 'force-dynamic';
 
+import { createTempEmail, pollForMessages, listMessages, getDomains } from '@/lib/catchmail';
+import { extractVerificationCode, extractOtpFromHtml, extractVerificationLink, htmlToPlainText } from '@/lib/catchmail';
+import { is2CaptchaConfigured, getBalance } from '@/lib/captcha';
+
 /**
- * POST /api/test-email — Test email creation + polling with CatchMail.io
- * Body: { "action": "create" | "poll" | "send-and-poll", "address"?: string }
+ * Test Email + Captcha endpoint — for debugging email and captcha integration.
  *
- * "create": Creates a random temp email and returns the address
- * "poll": Polls the given address for messages (5 attempts, 3s interval)
- * "send-and-poll": Creates email, waits 10s for any incoming messages (useful for manual testing)
+ * GET /api/test-email?action=create     — Create a temp email
+ * GET /api/test-email?action=check&email=xxx  — Check inbox for messages
+ * GET /api/test-email?action=domains    — List available domains
+ * GET /api/test-email?action=captcha    — Check 2captcha status + balance
+ * GET /api/test-email?action=full       — Full flow: create email, wait 30s, check inbox
  */
-import {
-  createTempEmail,
-  listMessages,
-  getMessage,
-  pollForMessages,
-  getDomains,
-  extractVerificationCode,
-  extractOtpFromHtml,
-  htmlToPlainText,
-} from '@/lib/catchmail';
+export async function GET(request: Request) {
+  const { searchParams } = new URL(request.url);
+  const action = searchParams.get('action') || 'status';
 
-export async function POST(request: Request) {
   try {
-    const body = await request.json().catch(() => ({}));
-    const action = body.action || 'create';
-
-    if (action === 'create') {
-      const email = await createTempEmail();
-      const domains = await getDomains();
-      return NextResponse.json({
-        success: true,
-        email: email.address,
-        domains,
-        note: 'Email created — any emails sent to this address will be catchable via the API',
-      });
-    }
-
-    if (action === 'poll') {
-      const address = body.address;
-      if (!address) {
-        return NextResponse.json({ error: 'address required for poll' }, { status: 400 });
-      }
-
-      // Quick check - list messages
-      const inbox = await listMessages(address);
-      const summaries = inbox.messages.map(m => ({
-        id: m.id,
-        from: m.from,
-        subject: m.subject,
-        date: m.date,
-      }));
-
-      // If messages found, get the latest one's details
-      let latestDetail = null;
-      let otpResult = null;
-      if (inbox.messages.length > 0) {
-        const latest = inbox.messages[inbox.messages.length - 1];
-        latestDetail = await getMessage(latest.id, address);
-
-        const text = latestDetail.body?.text || htmlToPlainText(latestDetail.body?.html || '');
-        const html = latestDetail.body?.html || '';
-        otpResult = {
-          code: extractOtpFromHtml(html) || extractVerificationCode(text),
-          from: latestDetail.from,
-          subject: latestDetail.subject,
-          textPreview: text.substring(0, 500),
-        };
-      }
-
-      return NextResponse.json({
-        success: true,
-        address,
-        totalMessages: inbox.count,
-        messages: summaries,
-        latest: latestDetail ? {
-          subject: latestDetail.subject,
-          from: latestDetail.from,
-          date: latestDetail.date,
-          textPreview: (latestDetail.body?.text || '').substring(0, 300),
-          htmlPreview: (latestDetail.body?.html || '').substring(0, 300),
-        } : null,
-        otp: otpResult,
-      });
-    }
-
-    if (action === 'send-and-poll') {
-      const address = body.address;
-      if (!address) {
-        // Create a new email
+    switch (action) {
+      // ── Create temp email ──
+      case 'create': {
         const email = await createTempEmail();
         return NextResponse.json({
+          action: 'create',
           success: true,
           email: email.address,
-          instruction: 'Send an email to this address, then call /api/test-email with action=poll&address=...',
+          accountId: email.accountId,
+          note: 'Email is implicitly created. Just start sending to it.',
+          timestamp: new Date().toISOString(),
         });
       }
 
-      // Poll with full timeout (like the engine does)
-      const pollStart = new Date();
-      const message = await pollForMessages(address, 30, 3000, pollStart);
+      // ── Check inbox ──
+      case 'check': {
+        const email = searchParams.get('email');
+        if (!email) {
+          return NextResponse.json({ error: 'Missing ?email= parameter' }, { status: 400 });
+        }
 
-      if (!message) {
+        const inbox = await listMessages(email);
+        const details = [];
+
+        // Get full content of up to 3 most recent messages
+        for (const msg of inbox.messages.slice(0, 3)) {
+          try {
+            const { getMessage } = await import('@/lib/catchmail');
+            const detail = await getMessage(msg.id, email);
+            const textBody = detail.body?.text || '';
+            const htmlBody = detail.body?.html || '';
+            const fullText = textBody || htmlToPlainText(htmlBody);
+
+            details.push({
+              id: msg.id,
+              from: msg.from,
+              subject: msg.subject,
+              date: msg.date,
+              textPreview: fullText.substring(0, 500),
+              otpCode: extractVerificationCode(fullText),
+              otpFromHtml: htmlBody ? extractOtpFromHtml(htmlBody) : null,
+              verificationLink: extractVerificationLink(htmlBody, fullText),
+            });
+          } catch (err) {
+            details.push({ id: msg.id, error: (err as Error).message });
+          }
+        }
+
         return NextResponse.json({
-          success: false,
-          address,
-          error: 'No messages received within timeout',
+          action: 'check',
+          email,
+          totalMessages: inbox.count,
+          messages: inbox.messages.slice(0, 10),
+          details,
+          timestamp: new Date().toISOString(),
         });
       }
 
-      const text = message.body?.text || htmlToPlainText(message.body?.html || '');
-      const html = message.body?.html || '';
-      const code = extractOtpFromHtml(html) || extractVerificationCode(text);
+      // ── List domains ──
+      case 'domains': {
+        const domains = await getDomains();
+        return NextResponse.json({
+          action: 'domains',
+          domains,
+          note: 'CatchMail.io requires no account creation. Just use any address @catchmail.io',
+          timestamp: new Date().toISOString(),
+        });
+      }
 
-      return NextResponse.json({
-        success: true,
-        address,
-        message: {
-          id: message.id,
-          from: message.from,
-          subject: message.subject,
-          date: message.date,
-          textPreview: text.substring(0, 1000),
-        },
-        otp: code,
-        rawBodyKeys: Object.keys(message),
-      });
+      // ── Captcha status ──
+      case 'captcha': {
+        const configured = is2CaptchaConfigured();
+        let balance: { balance: number; error?: string } | null = null;
+        if (configured) {
+          balance = await getBalance();
+        }
+
+        return NextResponse.json({
+          action: 'captcha',
+          provider: '2captcha',
+          configured,
+          apiKeySet: configured ? 'yes' : 'no (set TWOCAPTCHA_API_KEY env var)',
+          balance: balance?.balance,
+          balanceError: balance?.error,
+          supportedTypes: ['reCAPTCHA v2', 'reCAPTCHA v3', 'Cloudflare Turnstile', 'Image CAPTCHA'],
+          pricing: {
+            recaptchaV2: '$1-2.99/1000',
+            recaptchaV3: '$1.45-2.99/1000',
+            turnstile: '$1.45/1000',
+            imageCaptcha: '$0.50-1.00/1000',
+          },
+          timestamp: new Date().toISOString(),
+        });
+      }
+
+      // ── Full test flow ──
+      case 'full': {
+        const results: Record<string, unknown> = {};
+
+        // Step 1: Create email
+        const email = await createTempEmail();
+        results.email = email.address;
+        results.step1 = 'Email created';
+
+        // Step 2: Check inbox (should be empty)
+        const inbox = await listMessages(email.address);
+        results.initialMessages = inbox.count;
+
+        // Step 3: Wait and check for any messages
+        results.step2 = 'Waiting 15s then checking inbox...';
+        await new Promise(r => setTimeout(r, 15000));
+
+        const inbox2 = await listMessages(email.address);
+        results.afterWait = inbox2.count;
+        results.messages = inbox2.messages;
+
+        // Step 4: Check captcha
+        results.captcha = {
+          configured: is2CaptchaConfigured(),
+        };
+
+        return NextResponse.json({
+          action: 'full',
+          success: true,
+          ...results,
+          timestamp: new Date().toISOString(),
+        });
+      }
+
+      // ── Status (default) ──
+      default: {
+        return NextResponse.json({
+          action: 'status',
+          emailProvider: 'CatchMail.io',
+          emailProviderUrl: 'https://catchmail.io',
+          captchaProvider: '2captcha',
+          captchaConfigured: is2CaptchaConfigured(),
+          endpoints: {
+            create: '/api/test-email?action=create',
+            check: '/api/test-email?action=check&email=YOUR_EMAIL',
+            domains: '/api/test-email?action=domains',
+            captcha: '/api/test-email?action=captcha',
+            full: '/api/test-email?action=full',
+          },
+          timestamp: new Date().toISOString(),
+        });
+      }
     }
-
-    return NextResponse.json({ error: 'Unknown action. Use: create, poll, send-and-poll' }, { status: 400 });
   } catch (error) {
-    console.error('[API /test-email] Error:', error);
-    return NextResponse.json({ error: (error as Error).message }, { status: 500 });
-  }
-}
-
-// GET for quick testing
-export async function GET(request: Request) {
-  try {
-    const url = new URL(request.url);
-    const address = url.searchParams.get('address');
-
-    if (address) {
-      // Quick poll
-      const inbox = await listMessages(address);
-      return NextResponse.json({
-        address,
-        count: inbox.count,
-        messages: inbox.messages.map(m => ({
-          id: m.id,
-          from: m.from,
-          subject: m.subject,
-          date: m.date,
-        })),
-      });
-    }
-
-    // Default: create email
-    const email = await createTempEmail();
-    const domains = await getDomains();
     return NextResponse.json({
-      email: email.address,
-      domains,
-      hint: 'Add ?address=test@catchmail.io to poll a specific inbox',
-    });
-  } catch (error) {
-    return NextResponse.json({ error: (error as Error).message }, { status: 500 });
+      error: (error as Error).message,
+      stack: (error as Error).stack?.substring(0, 500),
+    }, { status: 500 });
   }
 }

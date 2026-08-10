@@ -6,6 +6,7 @@ import { isPoolActive, getWorkerStates, getMaxWorkers } from '@/lib/automation/s
 import { isBrowserAvailable, getBrowserStatus } from '@/lib/browser';
 import { getProxyStatus } from '@/lib/proxy';
 import { getKeepAliveStatus } from '@/lib/keepalive';
+import { is2CaptchaConfigured, getBalance } from '@/lib/captcha';
 
 /**
  * Health check endpoint — reports full system status.
@@ -20,6 +21,11 @@ export async function GET() {
     const browserStatus = getBrowserStatus();
     const proxyStatus = getProxyStatus();
     const keepAliveStatus = getKeepAliveStatus();
+    const captchaConfigured = is2CaptchaConfigured();
+    let captchaBalance: { balance: number; error?: string } | null = null;
+    if (captchaConfigured) {
+      captchaBalance = await getBalance().catch(() => ({ balance: 0, error: 'fetch failed' }));
+    }
 
     return NextResponse.json({
       status: 'ok',
@@ -68,6 +74,12 @@ export async function GET() {
         domain: 'catchmail.io',
         requiresAuth: false,
         requiresAccountCreation: false,
+      },
+      captcha: {
+        provider: '2captcha',
+        configured: captchaConfigured,
+        balance: captchaBalance?.balance,
+        supportedTypes: ['reCAPTCHA v2', 'reCAPTCHA v3', 'Turnstile', 'Image CAPTCHA'],
       },
       stats: {
         totalSignups,
