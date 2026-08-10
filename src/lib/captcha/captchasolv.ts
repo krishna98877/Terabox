@@ -13,7 +13,7 @@
  * - 10+ captcha types, average solve time < 15s
  * - Supports reCAPTCHA v2/v3, Turnstile, hCaptcha, GeeTest v4, and more
  *
- * API Key: Get via Discord — use /panel command in CaptchaSolv Discord
+ * API Key: Get via Telegram bot or Discord /panel command
  * Set CAPTCHASOLV_API_KEY env var
  *
  * Base URL: https://v1.captchasolv.com

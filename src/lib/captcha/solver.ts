@@ -9,7 +9,7 @@
  * - Sync endpoint: POST /solve (handles polling internally)
  * - 10+ captcha types, average solve time < 15s
  * - reCAPTCHA v2 (7-40s), v3 (3-5s), Turnstile (4-7s), hCaptcha, GeeTest v4
- * - Get API key via Discord: use /panel command in CaptchaSolv Discord
+ * - Get API key via Telegram bot or Discord /panel command
  * - Set CAPTCHASOLV_API_KEY env var
  *
  * Docs: https://docs.captchasolv.com/
