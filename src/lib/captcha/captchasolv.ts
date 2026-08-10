@@ -15,7 +15,15 @@
  * - waitForSlot: true queues instead of failing on ERROR_LIMIT_EXCEEDED (waits up to 300s)
  * - Token expiry: ~2 min for reCAPTCHA, ~5 min for Turnstile — use immediately!
  *
- * API Key: Get via Discord /panel command or Telegram bot
+ * ★★★ CRITICAL: Proxy-bound captcha solving ★★★
+ * Enterprise reCAPTCHA binds the token to the solver's IP address.
+ * If you solve from CaptchaSolv's IP (Proxyless) but submit from your proxy IP,
+ * TeraBox REJECTS the token → errno 400090 loop!
+ *
+ * FIX: Always use *Task (with proxy) types when you have a proxy.
+ * This makes CaptchaSolv solve from the SAME IP → token matches → accepted!
+ *
+ * API Key: Get via Discord /panel command
  * Set CAPTCHASOLV_API_KEY env var
  *
  * Base URL: https://v1.captchasolv.com
@@ -406,20 +414,33 @@ export function isConfigured(): boolean {
  * Solve reCAPTCHA v2 via CaptchaSolv.
  * Per docs: RecaptchaV2TaskProxyless / RecaptchaV2InvisibleTaskProxyless
  * Required: websiteURL, websiteKey
+ *
+ * ★ When proxy is provided, uses RecaptchaV2Task (with proxy) instead of Proxyless.
+ *   This ensures the captcha token is bound to the proxy IP — critical for Enterprise!
  */
 export async function solveRecaptchaV2(
   siteKey: string,
   pageUrl: string,
-  invisible = false
+  invisible = false,
+  proxyUrl?: string
 ): Promise<SolveResult> {
   const key = API_KEY();
   if (!key) return { success: false, error: 'CAPTCHASOLV_API_KEY not set' };
 
-  const taskType = invisible
-    ? TASK_TYPES.RECAPTCHA_V2_INVISIBLE
-    : TASK_TYPES.RECAPTCHA_V2;
+  // ★ Use proxied task type when proxy is available — token will be IP-bound to proxy
+  let taskType: string;
+  if (proxyUrl) {
+    taskType = invisible
+      ? TASK_TYPES.RECAPTCHA_V2_INVISIBLE_PROXY
+      : TASK_TYPES.RECAPTCHA_V2_PROXY;
+  } else {
+    taskType = invisible
+      ? TASK_TYPES.RECAPTCHA_V2_INVISIBLE
+      : TASK_TYPES.RECAPTCHA_V2;
+  }
 
-  const task = { type: taskType, websiteURL: pageUrl, websiteKey: siteKey };
+  const task: Record<string, unknown> = { type: taskType, websiteURL: pageUrl, websiteKey: siteKey };
+  if (proxyUrl) task.proxy = proxyUrl;
 
   console.log(`[CaptchaSolv] Solving reCAPTCHA v2${invisible ? ' (invisible)' : ''} for ${pageUrl.substring(0, 60)}...`);
 
@@ -454,23 +475,45 @@ export async function solveRecaptchaV2(
  * Required: websiteURL, websiteKey
  * Detection: script src uses enterprise.js instead of api.js
  *
+/**
+ * Solve reCAPTCHA v2 Enterprise via CaptchaSolv.
+ * ★ TeraBox uses Enterprise reCAPTCHA (errno 460030) — this is the correct type!
+ *
+ * Per docs: RecaptchaV2EnterpriseTaskProxyless / RecaptchaV2EnterpriseInvisibleTaskProxyless
+ * Required: websiteURL, websiteKey
+ * Detection: script src uses enterprise.js instead of api.js
+ *
  * ★ Uses ASYNC polling (createTask → getTaskResult) because Enterprise v2
  *   can take 40-75s and the sync /solve endpoint may 504 via Cloudflare.
  *   Async avoids the gateway timeout issue.
+ *
+ * ★★★ When proxy is provided, uses RecaptchaV2EnterpriseTask (with proxy).
+ *   This is CRITICAL — Enterprise reCAPTCHA binds the token to the solver's IP.
+ *   Solving from CaptchaSolv's IP but submitting from your proxy IP = REJECTED!
  */
 export async function solveRecaptchaV2Enterprise(
   siteKey: string,
   pageUrl: string,
-  invisible = false
+  invisible = false,
+  proxyUrl?: string
 ): Promise<SolveResult> {
   const key = API_KEY();
   if (!key) return { success: false, error: 'CAPTCHASOLV_API_KEY not set' };
 
-  const taskType = invisible
-    ? TASK_TYPES.RECAPTCHA_V2_ENTERPRISE_INVISIBLE
-    : TASK_TYPES.RECAPTCHA_V2_ENTERPRISE;
+  // ★ Use proxied task type when proxy is available
+  let taskType: string;
+  if (proxyUrl) {
+    taskType = invisible
+      ? TASK_TYPES.RECAPTCHA_V2_ENTERPRISE_INVISIBLE_PROXY
+      : TASK_TYPES.RECAPTCHA_V2_ENTERPRISE_PROXY;
+  } else {
+    taskType = invisible
+      ? TASK_TYPES.RECAPTCHA_V2_ENTERPRISE_INVISIBLE
+      : TASK_TYPES.RECAPTCHA_V2_ENTERPRISE;
+  }
 
-  const task = { type: taskType, websiteURL: pageUrl, websiteKey: siteKey };
+  const task: Record<string, unknown> = { type: taskType, websiteURL: pageUrl, websiteKey: siteKey };
+  if (proxyUrl) task.proxy = proxyUrl;
 
   console.log(`[CaptchaSolv] Solving reCAPTCHA v2 Enterprise${invisible ? ' (invisible)' : ''} for ${pageUrl.substring(0, 60)}... (async mode)`);
   return solveWithRetryAsync(key, task, 'reCAPTCHA v2 Enterprise');
@@ -480,22 +523,30 @@ export async function solveRecaptchaV2Enterprise(
  * Solve reCAPTCHA v3 via CaptchaSolv.
  * Per docs: RecaptchaV3TaskProxyless
  * Required: websiteURL, websiteKey
+/**
+ * Solve reCAPTCHA v3 via CaptchaSolv.
+ * Per docs: RecaptchaV3TaskProxyless
+ * Required: websiteURL, websiteKey
  * Optional: pageAction (string, e.g. "login"), score ("normal" or "high")
+ *
+ * ★ When proxy is provided, uses RecaptchaV3Task (with proxy) for IP binding.
  */
 export async function solveRecaptchaV3(
   siteKey: string,
   pageUrl: string,
   minScore = 0.3,
-  action = ''
+  action = '',
+  proxyUrl?: string
 ): Promise<SolveResult> {
   const key = API_KEY();
   if (!key) return { success: false, error: 'CAPTCHASOLV_API_KEY not set' };
 
   const task: Record<string, unknown> = {
-    type: TASK_TYPES.RECAPTCHA_V3,
+    type: proxyUrl ? TASK_TYPES.RECAPTCHA_V3_PROXY : TASK_TYPES.RECAPTCHA_V3,
     websiteURL: pageUrl,
     websiteKey: siteKey,
   };
+  if (proxyUrl) task.proxy = proxyUrl;
 
   // Per docs: score is "normal" (default) or "high" (for sites requiring score >= 0.7)
   task.score = minScore >= 0.7 ? 'high' : 'normal';
@@ -513,22 +564,30 @@ export async function solveRecaptchaV3(
  * Solve reCAPTCHA v3 Enterprise via CaptchaSolv.
  * Per docs: RecaptchaV3EnterpriseTaskProxyless
  * Same params as v3: websiteURL, websiteKey, pageAction, score
+/**
+ * Solve reCAPTCHA v3 Enterprise via CaptchaSolv.
+ * Per docs: RecaptchaV3EnterpriseTaskProxyless
+ * Same params as v3: websiteURL, websiteKey, pageAction, score
  * Detection: enterprise.js + grecaptcha.enterprise.execute()
+ *
+ * ★ When proxy is provided, uses RecaptchaV3EnterpriseTask (with proxy) for IP binding.
  */
 export async function solveRecaptchaV3Enterprise(
   siteKey: string,
   pageUrl: string,
   minScore = 0.3,
-  action = ''
+  action = '',
+  proxyUrl?: string
 ): Promise<SolveResult> {
   const key = API_KEY();
   if (!key) return { success: false, error: 'CAPTCHASOLV_API_KEY not set' };
 
   const task: Record<string, unknown> = {
-    type: TASK_TYPES.RECAPTCHA_V3_ENTERPRISE,
+    type: proxyUrl ? TASK_TYPES.RECAPTCHA_V3_ENTERPRISE_PROXY : TASK_TYPES.RECAPTCHA_V3_ENTERPRISE,
     websiteURL: pageUrl,
     websiteKey: siteKey,
   };
+  if (proxyUrl) task.proxy = proxyUrl;
 
   task.score = minScore >= 0.7 ? 'high' : 'normal';
   if (action) task.pageAction = action;
