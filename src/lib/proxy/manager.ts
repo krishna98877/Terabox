@@ -256,24 +256,46 @@ async function fetchFromGeoNode(): Promise<ProxyInfo[]> {
 // ─── Free Proxy API Sources (Backup — Datacenter) ───
 
 const FREE_PROXY_SOURCES = [
+  // ── ProxyScrape v3 API (best free source — elite anonymity) ──
   {
     name: 'proxyscrape',
     url: 'https://api.proxyscrape.com/v3/free-proxy-list/get?request=displayproxies&protocol=http&timeout=10000&proxy_format=display&anonymity=transparent&anonymity=anonymous',
     parse: (text: string): string[] => text.trim().split('\n').filter(l => l.includes(':')),
   },
+  // ── TheSpeedX — large list, frequently updated ──
   {
-    name: 'free-proxy-list',
+    name: 'speedx',
     url: 'https://raw.githubusercontent.com/TheSpeedX/PROXY-List/master/http.txt',
     parse: (text: string): string[] => text.trim().split('\n').filter(l => l.includes(':')),
   },
+  // ── Monosans — well-maintained, daily updates ──
   {
     name: 'monosans',
     url: 'https://raw.githubusercontent.com/monosans/proxy-list/main/proxies/http.txt',
     parse: (text: string): string[] => text.trim().split('\n').filter(l => l.includes(':')),
   },
+  // ── Clarketm — curated list ──
   {
     name: 'clarketm',
     url: 'https://raw.githubusercontent.com/clarketm/proxy-list/master/proxy-list-raw.txt',
+    parse: (text: string): string[] => text.trim().split('\n').filter(l => l.includes(':')),
+  },
+  // ── ProxyNova — high refresh rate (hourly updates) ──
+  {
+    name: 'proxynova',
+    url: 'https://raw.githubusercontent.com/roosterkid/openproxylist/main/HTTPS_RAW.txt',
+    parse: (text: string): string[] => text.trim().split('\n').filter(l => l.includes(':')),
+  },
+  // ── Hookzof — SOCKS5 proxies (protocol diversity) ──
+  {
+    name: 'hookzof-socks5',
+    url: 'https://raw.githubusercontent.com/hookzof/socks5_list/master/proxy.txt',
+    parse: (text: string): string[] => text.trim().split('\n').filter(l => l.includes(':')),
+  },
+  // ── E4coderdn — fresh HTTP proxies ──
+  {
+    name: 'e4coderdn',
+    url: 'https://raw.githubusercontent.com/e4coderdn/e4coderdn/main/proxy-list/http.txt',
     parse: (text: string): string[] => text.trim().split('\n').filter(l => l.includes(':')),
   },
 ];
@@ -287,11 +309,13 @@ function parseProxy(line: string, source = 'free-list'): ProxyInfo | null {
     const host = parts[0];
     const port = parseInt(parts[1], 10);
     if (!host || isNaN(port) || port < 1 || port > 65535) return null;
+    // SOCKS5 sources use socks5:// prefix
+    const isSocks5 = source.includes('socks5');
     return {
-      url: `http://${host}:${port}`,
+      url: isSocks5 ? `socks5://${host}:${port}` : `http://${host}:${port}`,
       host,
       port,
-      protocol: 'http',
+      protocol: isSocks5 ? 'socks5' : 'http',
       source,
       lastVerified: 0,
       failCount: 0,
@@ -368,7 +392,7 @@ async function validateProxy(proxy: ProxyInfo, timeoutMs = 8000): Promise<boolea
   } catch (tbErr) {
     // TeraBox check failed (timeout, network error) — still keep proxy
     // since it passed httpbin. It might work for other requests.
-    console.warn(`[Proxy] TeraBox validation skipped for ${proxy.host}:${proxy.port}: ${(tbErr as Error: Error).message?.substring(0, 50)}`);
+    console.warn(`[Proxy] TeraBox validation skipped for ${proxy.host}:${proxy.port}: ${(tbErr as Error).message?.substring(0, 50)}`);
   }
 
   proxy.lastVerified = Date.now();
