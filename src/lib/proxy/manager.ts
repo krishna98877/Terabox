@@ -1,28 +1,38 @@
 /**
- * Proxy Rotation Manager — Multi-source with smart validation.
+ * Proxy Rotation Manager — ProxyScrape.com ONLY.
  *
- * STRATEGY (layered — most reliable first):
- * 1. PRIMARY:   Proxifly API (api.proxifly.dev) — rotating HTTPS proxies,
- *    tested by Proxifly before delivery. Free tier: no API key needed.
- * 2. BACKUP:    Free proxy list APIs (ProxyScrape, GitHub lists) — validated
- *    locally. Less reliable but adds pool diversity.
- * 3. RESIDENTIAL: GeoNode free residential proxies — these are the most
- *    important for TeraBox! Datacenter IPs get captcha-flagged instantly,
- *    but residential IPs look like real users → no captcha.
+ * ═══════════════════════════════════════════════════════════════════
+ * SINGLE SOURCE: ProxyScrape v3 API (api.proxyscrape.com)
+ * ═══════════════════════════════════════════════════════════════════
  *
- * ★★★ CRITICAL INSIGHT ★★★
- * TeraBox uses risk-based captcha. Free datacenter proxies get flagged
- * immediately (errno 400090). RESIDENTIAL proxies avoid this because
- * they look like real user IPs. GeoNode provides free residential proxies.
+ * ProxyScrape provides the largest free proxy pool with multiple
+ * protocol & anonymity tiers. We fetch from ALL tiers to maximize
+ * our chances of finding proxies that TeraBox doesn't flag.
+ *
+ * FETCH STRATEGY (multi-tier from ProxyScrape):
+ * 1. ELITE HTTP    — highest anonymity, Western countries preferred
+ * 2. ELITE SOCKS5  — protocol diversity, different IP ranges
+ * 3. ANONYMOUS HTTP — broader pool, still decent anonymity
+ * 4. ALL HTTP       — last resort, largest pool but lower quality
+ *
+ * VALIDATION (tiered):
+ *   Tier 1: httpbin connectivity check (fast, 3s)
+ *   Tier 2: TeraBox API check (definitive — rejects captcha-flagged IPs)
+ *          Proxies that trigger errno 400090/460030/106 = INSTANT REJECT
+ *
+ * ★★★ CRITICAL: Why proxied CaptchaSolv tasks? ★★★
+ * Enterprise reCAPTCHA binds the token to the solver's IP.
+ * Proxyless solve → CaptchaSolv's IP ≠ your proxy IP → TeraBox REJECTS.
+ * Proxied solve → CaptchaSolv solves from YOUR proxy IP → token accepted!
  *
  * FEATURES:
- * - Multi-source fetching with priority ordering
- * - Batch validation against TeraBox (not just httpbin)
+ * - ProxyScrape-only: no other proxy sources, no IPRoyal, no Proxifly
+ * - Multi-tier fetch: elite → socks5 → anonymous → all
+ * - TeraBox-aware validation: auto-reject captcha-flagged IPs
  * - Round-robin rotation through validated pool
- * - Auto-refresh when pool is stale/depleted (every 5 min)
+ * - Auto-refresh every 5 minutes
  * - Failure tracking: remove proxy after 3 consecutive fails
  * - Direct-connection fallback if no proxy available
- * - SOCKS5 support via socks-proxy-agent
  */
 
 import { proxiedFetch } from '@/lib/http/proxied-fetch';
@@ -35,7 +45,7 @@ export interface ProxyInfo {
   port: number;
   protocol: 'http' | 'https' | 'socks4' | 'socks5';
   country?: string;
-  source?: string;       // which provider gave us this proxy
+  source?: string;       // which tier gave us this proxy
   anonymity?: string;    // transparent, anonymous, elite
   lastVerified: number;  // timestamp
   failCount: number;
@@ -51,364 +61,168 @@ let lastRefreshTime = 0;
 const REFRESH_INTERVAL = 5 * 60 * 1000; // 5 minutes
 const MAX_FAILS = 3; // Remove proxy after 3 consecutive failures
 
-// ─── IPRoyal Residential Gateway (BEST for TeraBox — real residential IPs!) ───
-// IPRoyal provides residential proxies via a gateway: http://user:pass@gate.iproyal.com:12321
-// Free trial: 100MB/1GB traffic. Paid: from $1.75/GB.
-// ★★★ This is the ONLY truly residential option in our stack. ★★★
-// Datacenter proxies get flagged by TeraBox → errno 400090.
-// IPRoyal residential IPs look like real users → no captcha!
+// ─── ProxyScrape v3 API ───
+// Docs: https://proxyscrape.com/resources/free-proxy-list
+// Base: https://api.proxyscrape.com/v3/free-proxy-list/get
 
-const IPROYAL_USER = () => process.env.IPROYAL_USERNAME || '';
-const IPROYAL_PASS = () => process.env.IPROYAL_PASSWORD || '';
-const IPROYAL_HOST = () => process.env.IPROYAL_HOST || 'gate.iproyal.com';
-const IPROYAL_PORT = () => parseInt(process.env.IPROYAL_PORT || '12321', 10);
-const IPROYAL_COUNTRY = () => process.env.IPROYAL_COUNTRY || ''; // e.g. 'us' for US-only
+const PROXYSCRAPE_BASE = 'https://api.proxyscrape.com/v3/free-proxy-list/get';
 
-interface IPRoyalConfig {
-  url: string;
-  host: string;
-  port: number;
-  country: string;
+interface ProxyScrapeTier {
+  name: string;          // tier label for logging
+  protocol: string;      // http, socks4, socks5
+  anonymity: string;     // elite, anonymous, transparent, all
+  country?: string;      // comma-separated country codes
+  maxProxies: number;    // max proxies to take from this tier
+  priority: number;      // lower = higher priority in rotation
 }
 
 /**
- * Build IPRoyal residential proxy URLs with rotation.
- * Each session gets a unique IP (IPRoyal rotates automatically).
- * Format: http://user:pass@gate.iproyal.com:12321?country=us&session=abc123
- *
- * ★ When passed to CaptchaSolv's proxied task types, the captcha token
- *   will be solved from this residential IP → TeraBox accepts it!
+ * ProxyScrape fetch tiers — ordered from best to worst.
+ * We fetch from ALL tiers to maximize the pool.
  */
-function getIPRoyalProxies(count = 5): ProxyInfo[] {
-  const user = IPROYAL_USER();
-  const pass = IPROYAL_PASS();
-  if (!user || !pass) return []; // No credentials configured
+const PROXYSCRAPE_TIERS: ProxyScrapeTier[] = [
+  // ★ Tier 1: Elite HTTP — highest anonymity, Western countries
+  {
+    name: 'elite-http-west',
+    protocol: 'http',
+    anonymity: 'elite',
+    country: 'us,gb,de,ca,fr,nl',
+    maxProxies: 25,
+    priority: 1,
+  },
+  // ★ Tier 2: Elite SOCKS5 — protocol diversity, different IP ranges
+  {
+    name: 'elite-socks5',
+    protocol: 'socks5',
+    anonymity: 'elite',
+    maxProxies: 15,
+    priority: 2,
+  },
+  // ★ Tier 3: Anonymous HTTP — broader pool, still decent
+  {
+    name: 'anonymous-http',
+    protocol: 'http',
+    anonymity: 'anonymous',
+    maxProxies: 20,
+    priority: 3,
+  },
+  // ★ Tier 4: All HTTP — last resort, largest pool
+  {
+    name: 'all-http',
+    protocol: 'http',
+    anonymity: 'all',
+    maxProxies: 15,
+    priority: 4,
+  },
+];
 
-  const host = IPROYAL_HOST();
-  const port = IPROYAL_PORT();
-  const country = IPROYAL_COUNTRY();
-  const proxies: ProxyInfo[] = [];
-
-  for (let i = 0; i < count; i++) {
-    // Each proxy gets a unique session string → different residential IP
-    const session = `tb_${Date.now()}_${i}_${Math.random().toString(36).substring(2, 8)}`;
-    let url = `http://${user}:${pass}@${host}:${port}`;
-    const params: string[] = [];
-    if (country) params.push(`country=${country}`);
-    params.push(`session=${session}`);
-    url += `?${params.join('&')}`;
-
-    proxies.push({
-      url,
-      host, // Gateway host, not actual IP (rotates)
-      port,
-      protocol: 'http',
-      country: country || 'rotating',
-      source: 'iproyal-residential',
-      anonymity: 'elite', // Residential = highest anonymity
-      lastVerified: Date.now(), // Trust IPRoyal — they pre-verify
-      failCount: 0,
-      successCount: 0,
-    });
+/**
+ * Fetch proxies from a single ProxyScrape tier.
+ * Uses `proxy_format=protocolipport` which returns lines like:
+ *   "http://1.2.3.4:8080" or "socks5://1.2.3.4:1080"
+ */
+async function fetchFromProxyScrapeTier(tier: ProxyScrapeTier): Promise<ProxyInfo[]> {
+  const qs = new URLSearchParams({
+    request: 'displayproxies',
+    protocol: tier.protocol,
+    timeout: '10000',
+    proxy_format: 'protocolipport',
+    anonymity: tier.anonymity,
+  });
+  if (tier.country) {
+    qs.set('country', tier.country);
   }
 
-  console.log(`[Proxy] IPRoyal residential: ${proxies.length} proxies configured (${country || 'global rotating'})`);
-  return proxies;
-}
-
-/**
- * Check if IPRoyal residential proxies are configured.
- */
-export function isIPRoyalConfigured(): boolean {
-  return !!(IPROYAL_USER() && IPROYAL_PASS());
-}
-
-// ─── Proxifly API (Primary Source) ───
-
-const PROXIFLY_API = 'https://api.proxifly.dev/get-proxy';
-const PROXIFLY_API_KEY = () => process.env.PROXIFLY_API_KEY || ''; // optional paid key
-
-interface ProxiflyResponse {
-  proxy: string;        // e.g. "http://1.2.3.4:8080"
-  protocol: string;     // e.g. "http"
-  ip: string;
-  port: number;
-  https: boolean;
-  anonymity: string;    // e.g. "transparent", "anonymous", "elite"
-  score: number;
-  geolocation?: {
-    country: string;
-    city: string;
-  };
-}
-
-/**
- * Fetch proxies from Proxifly API.
- * Each call returns 1 proxy (free tier). We call multiple times for diversity.
- * Proxifly pre-tests proxies before delivery — much more reliable than raw lists.
- */
-async function fetchFromProxifly(count = 10): Promise<ProxyInfo[]> {
-  const proxies: ProxyInfo[] = [];
-  const apiKey = PROXIFLY_API_KEY();
-
-  console.log(`[Proxy] Fetching ${count} proxies from Proxifly API...`);
-
-  // Fetch concurrently (each call returns 1 proxy)
-  const results = await Promise.allSettled(
-    Array.from({ length: count }, async () => {
-      try {
-        const body: Record<string, unknown> = {
-          quantity: 1,
-          protocol: ['http', 'socks5'],
-          https: true,
-          anonymity: ['elite', 'anonymous'], // Prefer high anonymity
-        };
-        if (apiKey) {
-          body.apiKey = apiKey;
-        }
-
-        const res = await fetch(PROXIFLY_API, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(body),
-          signal: AbortSignal.timeout(10000),
-          cache: 'no-store',
-        });
-
-        if (!res.ok) return null;
-
-        const data: ProxiflyResponse = await res.json();
-        if (!data?.proxy || !data?.ip) return null;
-
-        return {
-          url: data.proxy,
-          host: data.ip,
-          port: data.port,
-          protocol: (data.protocol || 'http') as ProxyInfo['protocol'],
-          country: data.geolocation?.country,
-          source: 'proxifly',
-          anonymity: data.anonymity,
-          lastVerified: Date.now(), // Proxifly pre-tests, so trust it
-          failCount: 0,
-          successCount: 0,
-        } as ProxyInfo;
-      } catch {
-        return null;
-      }
-    })
-  );
-
-  for (const result of results) {
-    if (result.status === 'fulfilled' && result.value) {
-      proxies.push(result.value);
-    }
-  }
-
-  console.log(`[Proxy] Proxifly: got ${proxies.length}/${count} proxies`);
-  return proxies;
-}
-
-// ─── ProxyScrape Elite (High-Quality Fallback) ───
-
-/**
- * Fetch elite-anonymity proxies from ProxyScrape.
- * These are better than transparent proxies for avoiding detection.
- * Used as fallback when GeoNode is unavailable.
- */
-async function fetchFromProxyScrape(): Promise<ProxyInfo[]> {
-  console.log('[Proxy] Fetching elite proxies from ProxyScrape...');
+  const url = `${PROXYSCRAPE_BASE}?${qs}`;
 
   try {
-    const res = await fetch(
-      'https://api.proxyscrape.com/v3/free-proxy-list/get?request=displayproxies&protocol=http&timeout=10000&proxy_format=protocolipport&anonymity=elite',
-      {
-        signal: AbortSignal.timeout(10000),
-        cache: 'no-store',
-      }
-    );
-
-    if (!res.ok) return [];
-
-    const text = await res.text();
-    const lines = text.trim().split('\n').filter(l => l.includes('://'));
-
-    const proxies: ProxyInfo[] = [];
-    for (const line of lines.slice(0, 20)) {
-      try {
-        // Format: "http://1.2.3.4:8080"
-        const url = new URL(line.trim());
-        proxies.push({
-          url: line.trim(),
-          host: url.hostname,
-          port: parseInt(url.port, 10),
-          protocol: 'http',
-          source: 'proxyscrape-elite',
-          anonymity: 'elite',
-          lastVerified: 0,
-          failCount: 0,
-          successCount: 0,
-        });
-      } catch {}
-    }
-
-    console.log(`[Proxy] ProxyScrape elite: got ${proxies.length} proxies`);
-    return proxies;
-  } catch (err) {
-    console.warn(`[Proxy] ProxyScrape failed: ${(err as Error).message}`);
-    return [];
-  }
-}
-
-// ─── GeoNode (Residential Proxy Source — CRITICAL for TeraBox) ───
-// NOTE: The old GeoNode API (proxylist.geonode.com) is DEAD (404).
-// We now use ProxyScrape's premium endpoint which provides better quality proxies.
-const GEONODE_API = 'https://api.proxyscrape.com/v3/free-proxy-list/get';
-
-/**
- * Fetch high-quality proxies from ProxyScrape (replaces dead GeoNode).
- * Uses the v3 API with elite anonymity and country filtering.
- * These proxies are much more reliable than the old GeoNode free list.
- *
- * Strategy: Fetch elite proxies from US/GB/DE/CA (Western countries)
- * which are less likely to be flagged by TeraBox.
- */
-async function fetchFromGeoNode(): Promise<ProxyInfo[]> {
-  console.log('[Proxy] Fetching elite proxies from ProxyScrape (GeoNode replacement)...');
-
-  try {
-    // v3 API with protocolipport format — returns http://ip:port lines
-    const qs = new URLSearchParams({
-      request: 'displayproxies',
-      protocol: 'http',
-      timeout: '10000',
-      proxy_format: 'protocolipport',
-      anonymity: 'elite',
-      country: 'us,gb,de,ca,fr,nl', // Western countries — less likely flagged
-    });
-
-    const res = await fetch(`${GEONODE_API}?${qs}`, {
-      signal: AbortSignal.timeout(10000),
+    const res = await fetch(url, {
+      signal: AbortSignal.timeout(15000),
       cache: 'no-store',
     });
 
     if (!res.ok) {
-      console.warn(`[Proxy] ProxyScrape returned ${res.status} — trying alternative...`);
-      return fetchFromProxyScrape();
+      console.warn(`[Proxy] ProxyScrape tier "${tier.name}" returned ${res.status}`);
+      return [];
     }
 
     const text = await res.text();
     const lines = text.trim().split('\n').filter(l => l.includes('://'));
 
     const proxies: ProxyInfo[] = [];
-    for (const line of lines.slice(0, 25)) {
+    for (const line of lines.slice(0, tier.maxProxies)) {
       try {
-        const url = new URL(line.trim());
+        const proxyUrl = line.trim();
+        const parsed = new URL(proxyUrl);
+        const protocol = parsed.protocol.replace(':', '') as ProxyInfo['protocol'];
+
         proxies.push({
-          url: line.trim(),
-          host: url.hostname,
-          port: parseInt(url.port, 10),
-          protocol: 'http',
-          source: 'geonode', // Keep same source name for priority ordering
-          anonymity: 'elite',
-          lastVerified: 0,
+          url: proxyUrl,
+          host: parsed.hostname,
+          port: parseInt(parsed.port, 10),
+          protocol: ['http', 'https', 'socks4', 'socks5'].includes(protocol) ? protocol : 'http',
+          country: tier.country?.split(',')[0], // first country in filter
+          source: tier.name,
+          anonymity: tier.anonymity === 'all' ? undefined : tier.anonymity,
+          lastVerified: 0, // will be set during validation
           failCount: 0,
           successCount: 0,
         });
-      } catch {}
+      } catch {
+        // Skip malformed lines
+      }
     }
 
-    console.log(`[Proxy] ProxyScrape elite (GeoNode replacement): got ${proxies.length} proxies`);
+    console.log(`[Proxy] ProxyScrape "${tier.name}": ${proxies.length} proxies fetched`);
     return proxies;
   } catch (err) {
-    console.warn(`[Proxy] ProxyScrape fetch failed: ${(err as Error).message}`);
+    console.warn(`[Proxy] ProxyScrape tier "${tier.name}" failed: ${(err as Error).message}`);
     return [];
   }
 }
 
-// ─── Free Proxy API Sources (Backup — Datacenter) ───
+/**
+ * Fetch proxies from ALL ProxyScrape tiers concurrently.
+ * Returns deduplicated results sorted by tier priority.
+ */
+async function fetchAllProxyScrapeTiers(): Promise<ProxyInfo[]> {
+  console.log(`[Proxy] Fetching from ${PROXYSCRAPE_TIERS.length} ProxyScrape tiers...`);
 
-const FREE_PROXY_SOURCES = [
-  // ── ProxyScrape v3 API (best free source — elite anonymity) ──
-  {
-    name: 'proxyscrape',
-    url: 'https://api.proxyscrape.com/v3/free-proxy-list/get?request=displayproxies&protocol=http&timeout=10000&proxy_format=display&anonymity=transparent&anonymity=anonymous',
-    parse: (text: string): string[] => text.trim().split('\n').filter(l => l.includes(':')),
-  },
-  // ── TheSpeedX — large list, frequently updated ──
-  {
-    name: 'speedx',
-    url: 'https://raw.githubusercontent.com/TheSpeedX/PROXY-List/master/http.txt',
-    parse: (text: string): string[] => text.trim().split('\n').filter(l => l.includes(':')),
-  },
-  // ── Monosans — well-maintained, daily updates ──
-  {
-    name: 'monosans',
-    url: 'https://raw.githubusercontent.com/monosans/proxy-list/main/proxies/http.txt',
-    parse: (text: string): string[] => text.trim().split('\n').filter(l => l.includes(':')),
-  },
-  // ── Clarketm — curated list ──
-  {
-    name: 'clarketm',
-    url: 'https://raw.githubusercontent.com/clarketm/proxy-list/master/proxy-list-raw.txt',
-    parse: (text: string): string[] => text.trim().split('\n').filter(l => l.includes(':')),
-  },
-  // ── ProxyNova — high refresh rate (hourly updates) ──
-  {
-    name: 'proxynova',
-    url: 'https://raw.githubusercontent.com/roosterkid/openproxylist/main/HTTPS_RAW.txt',
-    parse: (text: string): string[] => text.trim().split('\n').filter(l => l.includes(':')),
-  },
-  // ── Hookzof — SOCKS5 proxies (protocol diversity) ──
-  {
-    name: 'hookzof-socks5',
-    url: 'https://raw.githubusercontent.com/hookzof/socks5_list/master/proxy.txt',
-    parse: (text: string): string[] => text.trim().split('\n').filter(l => l.includes(':')),
-  },
-  // ── E4coderdn — fresh HTTP proxies ──
-  {
-    name: 'e4coderdn',
-    url: 'https://raw.githubusercontent.com/e4coderdn/e4coderdn/main/proxy-list/http.txt',
-    parse: (text: string): string[] => text.trim().split('\n').filter(l => l.includes(':')),
-  },
-];
+  const results = await Promise.allSettled(
+    PROXYSCRAPE_TIERS.map(tier => fetchFromProxyScrapeTier(tier))
+  );
 
-// ─── Parse proxy string to ProxyInfo ───
-
-function parseProxy(line: string, source = 'free-list'): ProxyInfo | null {
-  try {
-    const parts = line.trim().split(':');
-    if (parts.length < 2) return null;
-    const host = parts[0];
-    const port = parseInt(parts[1], 10);
-    if (!host || isNaN(port) || port < 1 || port > 65535) return null;
-    // SOCKS5 sources use socks5:// prefix
-    const isSocks5 = source.includes('socks5');
-    return {
-      url: isSocks5 ? `socks5://${host}:${port}` : `http://${host}:${port}`,
-      host,
-      port,
-      protocol: isSocks5 ? 'socks5' : 'http',
-      source,
-      lastVerified: 0,
-      failCount: 0,
-      successCount: 0,
-    };
-  } catch {
-    return null;
+  const allProxies: ProxyInfo[] = [];
+  for (const result of results) {
+    if (result.status === 'fulfilled') {
+      allProxies.push(...result.value);
+    }
   }
+
+  // Deduplicate by host:port
+  const seen = new Set<string>();
+  const deduped = allProxies.filter(p => {
+    const key = `${p.host}:${p.port}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+
+  // Sort by tier priority (lower priority number = first in rotation)
+  deduped.sort((a, b) => {
+    const tierA = PROXYSCRAPE_TIERS.find(t => t.name === a.source);
+    const tierB = PROXYSCRAPE_TIERS.find(t => t.name === b.source);
+    return (tierA?.priority ?? 99) - (tierB?.priority ?? 99);
+  });
+
+  console.log(`[Proxy] ProxyScrape total: ${deduped.length} unique proxies (from ${allProxies.length} raw)`);
+  return deduped;
 }
 
 // ─── Validate a single proxy ───
 // ★★★ TIERED VALIDATION: httpbin first (fast), then TeraBox (definitive) ★★★
-// A proxy that works for httpbin might still get blocked by TeraBox.
-// But we don't want to waste TeraBox requests on obviously dead proxies.
 
 async function validateProxy(proxy: ProxyInfo, timeoutMs = 8000): Promise<boolean> {
-  // Proxifly proxies are pre-validated — trust them if fresh
-  if (proxy.source === 'proxifly' && proxy.lastVerified > Date.now() - 60000) {
-    return true;
-  }
-
   // ★ Tier 1: Quick connectivity check via httpbin (fast, 3s timeout)
   try {
     const res = await proxiedFetch('https://httpbin.org/ip', {
@@ -426,24 +240,29 @@ async function validateProxy(proxy: ProxyInfo, timeoutMs = 8000): Promise<boolea
 
   // ★ Tier 2: TeraBox-specific validation (definitive)
   // Check if TeraBox accepts requests from this proxy IP.
-  // If TeraBox returns captcha errno (400090/460030/106), the proxy is flagged → FAIL.
-  // If TeraBox returns normal response (even error), the proxy is NOT flagged → PASS.
+  // If TeraBox returns captcha errno (400090/460030/106), proxy is flagged → FAIL.
+  // If TeraBox returns normal response (even error), proxy is NOT flagged → PASS.
   try {
-    const teraboxRes = await proxiedFetch('https://www.1024terabox.com/api/shorturlinfo?shorturl=1_test&root=1&app_id=250528&web=1', {
-      signal: AbortSignal.timeout(timeoutMs),
-      cache: 'no-store',
-      proxyUrl: proxy.url,
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
-        'Accept': 'application/json, text/plain, */*',
-        'sec-ch-ua': '"Not/A)Brand";v="8", "Chromium";v="126", "Google Chrome";v="126"',
-        'sec-ch-ua-mobile': '?0',
-        'sec-ch-ua-platform': '"Windows"',
-        'sec-fetch-dest': 'empty',
-        'sec-fetch-mode': 'cors',
-        'sec-fetch-site': 'same-origin',
-      },
-    });
+    const teraboxRes = await proxiedFetch(
+      'https://www.1024terabox.com/api/shorturlinfo?shorturl=1_test&root=1&app_id=250528&web=1',
+      {
+        signal: AbortSignal.timeout(timeoutMs),
+        cache: 'no-store',
+        proxyUrl: proxy.url,
+        headers: {
+          'User-Agent':
+            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
+          Accept: 'application/json, text/plain, */*',
+          'sec-ch-ua':
+            '"Not/A)Brand";v="8", "Chromium";v="126", "Google Chrome";v="126"',
+          'sec-ch-ua-mobile': '?0',
+          'sec-ch-ua-platform': '"Windows"',
+          'sec-fetch-dest': 'empty',
+          'sec-fetch-mode': 'cors',
+          'sec-fetch-site': 'same-origin',
+        },
+      }
+    );
 
     if (teraboxRes.ok) {
       const tbData = await teraboxRes.json();
@@ -452,7 +271,9 @@ async function validateProxy(proxy: ProxyInfo, timeoutMs = 8000): Promise<boolea
       // If TeraBox returned captcha-required on a simple API call,
       // this proxy IP is HIGH RISK — avoid it!
       if (errno === 400090 || errno === 460030 || errno === 106) {
-        console.warn(`[Proxy] ${proxy.host}:${proxy.port} flagged by TeraBox (errno ${errno}) — skipping`);
+        console.warn(
+          `[Proxy] ${proxy.host}:${proxy.port} flagged by TeraBox (errno ${errno}) — skipping`
+        );
         return false;
       }
 
@@ -464,7 +285,9 @@ async function validateProxy(proxy: ProxyInfo, timeoutMs = 8000): Promise<boolea
   } catch (tbErr) {
     // TeraBox check failed (timeout, network error) — still keep proxy
     // since it passed httpbin. It might work for other requests.
-    console.warn(`[Proxy] TeraBox validation skipped for ${proxy.host}:${proxy.port}: ${(tbErr as Error).message?.substring(0, 50)}`);
+    console.warn(
+      `[Proxy] TeraBox validation skipped for ${proxy.host}:${proxy.port}: ${(tbErr as Error).message?.substring(0, 50)}`
+    );
   }
 
   proxy.lastVerified = Date.now();
@@ -490,44 +313,6 @@ export function createAgent(proxy: ProxyInfo): any | null {
   }
 }
 
-// ─── Fetch proxies from free list sources ───
-
-async function fetchFromFreeLists(): Promise<ProxyInfo[]> {
-  const allProxies: ProxyInfo[] = [];
-
-  const results = await Promise.allSettled(
-    FREE_PROXY_SOURCES.map(async (source) => {
-      try {
-        const res = await fetch(source.url, {
-          signal: AbortSignal.timeout(10000),
-          cache: 'no-store',
-        });
-        if (!res.ok) return [];
-        const text = await res.text();
-        const lines = source.parse(text);
-        return lines.map(l => parseProxy(l, source.name)).filter((p): p is ProxyInfo => p !== null);
-      } catch {
-        return [];
-      }
-    })
-  );
-
-  for (const result of results) {
-    if (result.status === 'fulfilled') {
-      allProxies.push(...result.value);
-    }
-  }
-
-  // Deduplicate by host:port
-  const seen = new Set<string>();
-  return allProxies.filter((p) => {
-    const key = `${p.host}:${p.port}`;
-    if (seen.has(key)) return false;
-    seen.add(key);
-    return true;
-  });
-}
-
 // ─── Validate proxies in batch ───
 
 async function validateBatch(proxies: ProxyInfo[], concurrency = 10): Promise<ProxyInfo[]> {
@@ -536,7 +321,7 @@ async function validateBatch(proxies: ProxyInfo[], concurrency = 10): Promise<Pr
   for (let i = 0; i < proxies.length; i += concurrency) {
     const batch = proxies.slice(i, i + concurrency);
     const results = await Promise.allSettled(
-      batch.map(async (proxy) => {
+      batch.map(async proxy => {
         const ok = await validateProxy(proxy);
         return ok ? proxy : null;
       })
@@ -555,50 +340,34 @@ async function validateBatch(proxies: ProxyInfo[], concurrency = 10): Promise<Pr
 
 /**
  * Initialize and refresh the proxy pool.
- * Strategy: GeoNode residential first → Proxifly → free lists as backup.
+ * ProxyScrape-only: fetches from all tiers, validates, and builds pool.
  */
-export async function refreshProxyPool(): Promise<{ fetched: number; validated: number; total: number }> {
+export async function refreshProxyPool(): Promise<{
+  fetched: number;
+  validated: number;
+  total: number;
+}> {
   if (isRefreshing) {
     return { fetched: 0, validated: 0, total: proxyPool.length };
   }
 
   isRefreshing = true;
-  console.log('[Proxy] Refreshing proxy pool...');
+  console.log('[Proxy] Refreshing proxy pool (ProxyScrape only)...');
 
   try {
-    // ── Phase 0: IPRoyal residential (BEST — real residential IPs, no captcha!) ──
-    const iproyalProxies = getIPRoyalProxies(5);
-    console.log(`[Proxy] IPRoyal residential: ${iproyalProxies.length} configured`);
+    // Fetch from all ProxyScrape tiers concurrently
+    const allRaw = await fetchAllProxyScrapeTiers();
+    console.log(`[Proxy] Fetched ${allRaw.length} raw proxies from ProxyScrape`);
 
-    // ── Phase 1: GeoNode/ProxyScrape elite proxies (good fallback) ──
-    const geoNodeProxies = await fetchFromGeoNode();
-    // Validate elite proxies (they're usually good, but check anyway)
-    const validGeoNode = geoNodeProxies.length > 0
-      ? await validateBatch(geoNodeProxies.slice(0, 15), 5)
-      : [];
-    console.log(`[Proxy] GeoNode elite: ${validGeoNode.length}/${geoNodeProxies.length} valid`);
-
-    // ── Phase 2: Proxifly (pre-validated — fast) ──
-    const proxiflyProxies = await fetchFromProxifly(10);
-
-    // ── Phase 3: Free lists (datacenter — least reliable, validate carefully) ──
-    const freeRawProxies = await fetchFromFreeLists();
-    console.log(`[Proxy] Fetched ${freeRawProxies.length} raw proxies from ${FREE_PROXY_SOURCES.length} free sources`);
-
-    // Validate a sample of free proxies (first 30 — don't waste time)
-    const toValidate = freeRawProxies.slice(0, 30);
-    const validFreeProxies = await validateBatch(toValidate, 15);
-    console.log(`[Proxy] Validated ${validFreeProxies.length} working free proxies`);
-
-    // ── Merge: IPRoyal residential FIRST, then elite, then Proxifly, then free ──
-    const allNew = [...iproyalProxies, ...validGeoNode, ...proxiflyProxies, ...validFreeProxies];
+    // Validate proxies (batch, up to 40 at a time)
+    const toValidate = allRaw.slice(0, 40);
+    const validProxies = await validateBatch(toValidate, 15);
+    console.log(`[Proxy] Validated ${validProxies.length}/${toValidate.length} working proxies`);
 
     // Merge with existing pool (keep working proxies, add new ones)
     const existingUrls = new Set(proxyPool.map(p => p.url));
-    const newProxies = allNew.filter(p => !existingUrls.has(p.url));
+    const newProxies = validProxies.filter(p => !existingUrls.has(p.url));
 
-    // Keep existing working proxies, add new ones
-    // Residential proxies go first in the pool for priority
     proxyPool = [
       ...proxyPool.filter(p => p.failCount < MAX_FAILS), // keep working existing
       ...newProxies,
@@ -606,15 +375,21 @@ export async function refreshProxyPool(): Promise<{ fetched: number; validated: 
     currentIndex = 0;
     lastRefreshTime = Date.now();
 
-    const iproyalCount = proxyPool.filter(p => p.source === 'iproyal-residential').length;
-    const hqCount = proxyPool.filter(p => p.source === 'geonode' || p.source === 'proxyscrape-elite').length;
-    const proxiflyCount = proxyPool.filter(p => p.source === 'proxifly').length;
-    const freeCount = proxyPool.filter(p => p.source !== 'iproyal-residential' && p.source !== 'geonode' && p.source !== 'proxifly' && p.source !== 'proxyscrape-elite').length;
-    console.log(`[Proxy] Pool size: ${proxyPool.length} (IPRoyal: ${iproyalCount}, HighQuality: ${hqCount}, Proxifly: ${proxiflyCount}, Free: ${freeCount})`);
+    // Log pool composition by tier
+    const tierCounts: Record<string, number> = {};
+    for (const p of proxyPool) {
+      const src = p.source || 'unknown';
+      tierCounts[src] = (tierCounts[src] || 0) + 1;
+    }
+    console.log(
+      `[Proxy] Pool size: ${proxyPool.length} — tiers: ${Object.entries(tierCounts)
+        .map(([k, v]) => `${k}: ${v}`)
+        .join(', ')}`
+    );
 
     return {
-      fetched: freeRawProxies.length + proxiflyProxies.length + geoNodeProxies.length,
-      validated: validFreeProxies.length + proxiflyProxies.length + validGeoNode.length,
+      fetched: allRaw.length,
+      validated: validProxies.length,
       total: proxyPool.length,
     };
   } catch (error) {
@@ -627,7 +402,7 @@ export async function refreshProxyPool(): Promise<{ fetched: number; validated: 
 
 /**
  * Get the next proxy in rotation.
- * ★ Prefers residential proxies (GeoNode) → Proxifly → free proxies.
+ * ★ Prefers elite proxies → socks5 → anonymous → all
  * Auto-refreshes if pool is empty or stale.
  */
 export async function getNextProxy(): Promise<ProxyInfo | null> {
@@ -641,34 +416,37 @@ export async function getNextProxy(): Promise<ProxyInfo | null> {
     return null;
   }
 
-  // ★ Priority 0: IPRoyal residential (BEST — real residential IPs, no captcha!)
-  const iproyalProxies = proxyPool.filter(p => p.source === 'iproyal-residential' && p.failCount < MAX_FAILS);
-  if (iproyalProxies.length > 0) {
-    // For IPRoyal, always pick a fresh session (different residential IP each time)
-    const proxy = iproyalProxies[currentIndex % iproyalProxies.length];
-    currentIndex++;
-    return proxy;
-  }
-
-  // ★ Priority 1: High-quality proxies (ProxyScrape elite + GeoNode)
-  const hqProxies = proxyPool.filter(
-    p => (p.source === 'geonode' || p.source === 'proxyscrape-elite') && p.failCount < MAX_FAILS
+  // ★ Priority 1: Elite proxies (highest anonymity — least likely flagged)
+  const eliteProxies = proxyPool.filter(
+    p => p.anonymity === 'elite' && p.failCount < MAX_FAILS
   );
-  if (hqProxies.length > 0) {
-    const proxy = hqProxies[currentIndex % hqProxies.length];
+  if (eliteProxies.length > 0) {
+    const proxy = eliteProxies[currentIndex % eliteProxies.length];
     currentIndex++;
     return proxy;
   }
 
-  // ★ Priority 2: Proxifly proxies (pre-validated, rotate automatically)
-  const proxiflyProxies = proxyPool.filter(p => p.source === 'proxifly' && p.failCount < MAX_FAILS);
-  if (proxiflyProxies.length > 0) {
-    const proxy = proxiflyProxies[currentIndex % proxiflyProxies.length];
+  // ★ Priority 2: SOCKS5 proxies (protocol diversity)
+  const socksProxies = proxyPool.filter(
+    p => p.protocol === 'socks5' && p.failCount < MAX_FAILS
+  );
+  if (socksProxies.length > 0) {
+    const proxy = socksProxies[currentIndex % socksProxies.length];
     currentIndex++;
     return proxy;
   }
 
-  // ★ Priority 3: Any working proxy
+  // ★ Priority 3: Anonymous proxies
+  const anonProxies = proxyPool.filter(
+    p => p.anonymity === 'anonymous' && p.failCount < MAX_FAILS
+  );
+  if (anonProxies.length > 0) {
+    const proxy = anonProxies[currentIndex % anonProxies.length];
+    currentIndex++;
+    return proxy;
+  }
+
+  // ★ Priority 4: Any working proxy
   const workingProxies = proxyPool.filter(p => p.failCount < MAX_FAILS);
   if (workingProxies.length > 0) {
     const proxy = workingProxies[currentIndex % workingProxies.length];
@@ -713,23 +491,30 @@ export function getProxyStatus(): {
   currentIndex: number;
   lastRefresh: string;
   isRefreshing: boolean;
-  residentialCount: number;
-  proxiflyCount: number;
-  freeCount: number;
-  proxies: Array<{ url: string; source?: string; country?: string; anonymity?: string; successCount: number; failCount: number }>;
+  eliteCount: number;
+  socks5Count: number;
+  anonCount: number;
+  proxies: Array<{
+    url: string;
+    source?: string;
+    country?: string;
+    anonymity?: string;
+    successCount: number;
+    failCount: number;
+  }>;
 } {
-  const residentialCount = proxyPool.filter(p => p.source === 'iproyal-residential' || p.source === 'geonode' || p.source === 'proxyscrape-elite').length;
-  const proxiflyCount = proxyPool.filter(p => p.source === 'proxifly').length;
-  const freeCount = proxyPool.filter(p => p.source !== 'iproyal-residential' && p.source !== 'geonode' && p.source !== 'proxifly' && p.source !== 'proxyscrape-elite').length;
+  const eliteCount = proxyPool.filter(p => p.anonymity === 'elite').length;
+  const socks5Count = proxyPool.filter(p => p.protocol === 'socks5').length;
+  const anonCount = proxyPool.filter(p => p.anonymity === 'anonymous').length;
 
   return {
     poolSize: proxyPool.length,
     currentIndex,
     lastRefresh: lastRefreshTime ? new Date(lastRefreshTime).toISOString() : 'never',
     isRefreshing,
-    residentialCount,
-    proxiflyCount,
-    freeCount,
+    eliteCount,
+    socks5Count,
+    anonCount,
     proxies: proxyPool.slice(0, 20).map(p => ({
       url: p.url,
       source: p.source,
@@ -745,7 +530,25 @@ export function getProxyStatus(): {
  * Set custom proxy list (for user-configured proxies).
  */
 export function setCustomProxies(proxies: string[]): void {
-  const parsed = proxies.map(l => parseProxy(l, 'custom')).filter((p): p is ProxyInfo => p !== null);
+  const parsed = proxies
+    .map(l => {
+      try {
+        const url = new URL(l.trim());
+        return {
+          url: l.trim(),
+          host: url.hostname,
+          port: parseInt(url.port, 10),
+          protocol: url.protocol.replace(':', '') as ProxyInfo['protocol'],
+          source: 'custom',
+          lastVerified: 0,
+          failCount: 0,
+          successCount: 0,
+        } as ProxyInfo;
+      } catch {
+        return null;
+      }
+    })
+    .filter((p): p is ProxyInfo => p !== null);
   proxyPool = [...parsed, ...proxyPool];
   console.log(`[Proxy] Added ${parsed.length} custom proxies (pool: ${proxyPool.length})`);
 }
