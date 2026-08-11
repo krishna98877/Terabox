@@ -222,11 +222,11 @@ async function fetchAllProxyScrapeTiers(): Promise<ProxyInfo[]> {
 // ─── Validate a single proxy ───
 // ★★★ TIERED VALIDATION: httpbin first (fast), then TeraBox (definitive) ★★★
 
-async function validateProxy(proxy: ProxyInfo, timeoutMs = 8000): Promise<boolean> {
-  // ★ Tier 1: Quick connectivity check via httpbin (fast, 3s timeout)
+async function validateProxy(proxy: ProxyInfo, timeoutMs = 5000): Promise<boolean> {
+  // ★ Tier 1: Quick connectivity check via httpbin (fast, 2s timeout)
   try {
     const res = await proxiedFetch('https://httpbin.org/ip', {
-      signal: AbortSignal.timeout(Math.min(timeoutMs, 3000)),
+      signal: AbortSignal.timeout(Math.min(timeoutMs, 2000)),
       cache: 'no-store',
       proxyUrl: proxy.url,
     });
@@ -251,10 +251,10 @@ async function validateProxy(proxy: ProxyInfo, timeoutMs = 8000): Promise<boolea
         proxyUrl: proxy.url,
         headers: {
           'User-Agent':
-            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
+            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
           Accept: 'application/json, text/plain, */*',
           'sec-ch-ua':
-            '"Not/A)Brand";v="8", "Chromium";v="126", "Google Chrome";v="126"',
+            '"Not/A)Brand";v="8", "Chromium";v="131", "Google Chrome";v="131"',
           'sec-ch-ua-mobile': '?0',
           'sec-ch-ua-platform': '"Windows"',
           'sec-fetch-dest': 'empty',
@@ -359,9 +359,9 @@ export async function refreshProxyPool(): Promise<{
     const allRaw = await fetchAllProxyScrapeTiers();
     console.log(`[Proxy] Fetched ${allRaw.length} raw proxies from ProxyScrape`);
 
-    // Validate proxies (batch, up to 40 at a time)
-    const toValidate = allRaw.slice(0, 40);
-    const validProxies = await validateBatch(toValidate, 15);
+    // Validate proxies (batch, up to 50 at a time for faster pool refresh)
+    const toValidate = allRaw.slice(0, 50);
+    const validProxies = await validateBatch(toValidate, 20);
     console.log(`[Proxy] Validated ${validProxies.length}/${toValidate.length} working proxies`);
 
     // Merge with existing pool (keep working proxies, add new ones)

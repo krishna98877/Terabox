@@ -16,7 +16,15 @@
 const BASE_URL = 'https://api.catchmail.io';
 // ★ Multiple domains to avoid TeraBox blocking specific disposable email domains
 // Rotating across domains means if TeraBox blocks one, others still work
-const DEFAULT_DOMAINS = ['catchmail.io', 'mailistry.com', 'zeppost.com', 'snapmail.cc', 'mailsac.com'];
+// ★★★ IMPORTANT: Use less-obvious domains first — TeraBox likely blocks well-known ones
+// like catchmail.io, snapmail.cc. Try less common ones first.
+const DEFAULT_DOMAINS = [
+  'mailistry.com',    // Least known — try first
+  'zeppost.com',      // Uncommon
+  'mailsac.com',      // Not widely known as disposable
+  'snapmail.cc',      // Common but sometimes works
+  'catchmail.io',     // Most obvious — try last
+];
 const TIMEOUT = 25000;
 
 // ─── Types ───

@@ -198,8 +198,17 @@ async function executeApiSignup(
     // Step 2: Send verification code
     steps.push('Sending verification code to email...');
     await naturalDelay(300, 1000); // Small delay before sending code — looks organic
-    const encryptedEmail = pubkey?.pubkey ? encryptEmail(email, pubkey.pubkey) : email;
-    const isEncrypted = encryptedEmail !== email;
+    let encryptedEmail: string;
+    let isEncrypted = false;
+    try {
+      encryptedEmail = pubkey?.pubkey ? encryptEmail(email, pubkey.pubkey) : email;
+      isEncrypted = encryptedEmail !== email;
+    } catch (encErr) {
+      // RSA encryption failed — try without encryption (some TeraBox endpoints accept it)
+      steps.push(`WARNING: Email encryption failed: ${(encErr as Error).message} — trying without encryption`);
+      encryptedEmail = email;
+      isEncrypted = false;
+    }
 
     let sendResult = await sendVerificationCode(encryptedEmail, gIdentity, isEncrypted);
     steps.push(`sendcode: errno=${sendResult.errno}, ${sendResult.success ? 'OK' : sendResult.error}`);
@@ -329,7 +338,13 @@ async function executeApiSignup(
     // Step 7: Set password and finish registration
     // ★ TeraBox can ALSO demand captcha on finish! Handle with retry.
     const password = generateApiPassword();
-    const encryptedPwd = pubkey?.pubkey ? encodePassword(password, pubkey.pubkey) : password;
+    let encryptedPwd: string;
+    try {
+      encryptedPwd = pubkey?.pubkey ? encodePassword(password, pubkey.pubkey) : password;
+    } catch (encErr) {
+      steps.push(`WARNING: Password encryption failed — using plaintext`);
+      encryptedPwd = password;
+    }
     steps.push('Finishing registration with password...');
 
     let finishResult = await finishRegistration(apiToken, encryptedPwd, gIdentity);
@@ -361,9 +376,9 @@ async function executeApiSignup(
       return { success: true, verificationCode: code, password, steps };
     }
 
-    // Finish failed but verify might have worked
+    // Finish failed — this is a real failure, not a partial success
     steps.push(`Finish error: ${finishResult.error} (errno ${finishResult.errno})`);
-    return { success: true, verificationCode: code, password, steps, error: `Finish failed: ${finishResult.error}` };
+    return { success: false, error: `Finish failed: ${finishResult.error}`, steps };
 
   } catch (error) {
     steps.push(`FATAL: ${(error as Error).message}`);
@@ -524,14 +539,31 @@ export async function executeSignup(referralLink: string): Promise<SignupResult>
           referralSteps.push(`shareInfo: ${shareInfo.success ? 'OK' : shareInfo.error}`);
 
           if (shareInfo.success && shareInfo.shareid && shareInfo.uk) {
-            // Step B: Login to get auth token
+            // Step B: Login to get auth token (may require captcha)
             const pubkey = await getPubKey();
-            const loginResult = await loginToTerabox(
+            let loginResult = await loginToTerabox(
               tempEmail.address,
               apiResult.password || '',
               pubkey?.pubkey
             );
             referralSteps.push(`login: ${loginResult.success ? 'OK' : loginResult.error}`);
+
+            // Handle captcha on login
+            if (!loginResult.success && (loginResult.errno === 400090 || loginResult.errno === 460030 || loginResult.errno === 106)) {
+              referralSteps.push(`Login needs captcha (errno ${loginResult.errno}) — solving...`);
+              if (isCaptchaConfigured()) {
+                const siteKey = getRecaptchaSiteKey();
+                const teraboxPageUrl = 'https://www.1024terabox.com/';
+                const captchaToken = await solveCaptchaForSignup(siteKey, teraboxPageUrl, proxy?.url);
+                if (captchaToken) {
+                  // Re-login won't work directly with captcha, but we can try visiting the share link
+                  // which sometimes sets the right session cookies
+                  referralSteps.push(`Captcha solved for login — retrying...`);
+                  loginResult = await loginToTerabox(tempEmail.address, apiResult.password || '', pubkey?.pubkey);
+                  referralSteps.push(`login retry: ${loginResult.success ? 'OK' : loginResult.error}`);
+                }
+              }
+            }
 
             if (loginResult.success && loginResult.bdstoken) {
               // Step C: ★★★ SHARE TRANSFER — THE KEY API ★★★

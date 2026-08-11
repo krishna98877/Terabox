@@ -11,7 +11,7 @@
  */
 
 const API_BASE = 'https://v1.captchasolv.com';
-const CAPTCHASOLV_API_KEY = process.env.CAPTCHASOLV_API_KEY || '';
+const CAPTCHASOLV_API_KEY = process.env.CAPTCHASOLV_API_KEY ?? '';
 
 // ─── Test 1: CaptchaSolv API Key ───
 async function testCaptchaSolvApiKey() {

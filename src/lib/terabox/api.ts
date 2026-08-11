@@ -100,8 +100,8 @@ export function getCookieCount(): number {
 // TeraBox risk detection checks for modern browser headers.
 // Missing sec-ch-ua, sec-fetch-* etc. flags the request as bot-like.
 
-const CHROME_VERSION = '126';
-const CHROME_FULL_VERSION = '126.0.0.0';
+const CHROME_VERSION = '131';
+const CHROME_FULL_VERSION = '131.0.0.0';
 
 function getChromeHeaders(baseUrl: string, extraHeaders: Record<string, string> = {}): Record<string, string> {
   return {
@@ -179,7 +179,7 @@ async function passportPost(
         headers,
         body,
         redirect: 'follow',
-        signal: AbortSignal.timeout(15000),
+        signal: AbortSignal.timeout(25000),
         cache: 'no-store',
         proxyUrl: _proxyUrl || undefined,
       });
@@ -423,9 +423,12 @@ export function rsaEncrypt(data: string, pubkeyStr: string): string {
     // Return base64 encoded
     return forge.util.encode64(encrypted);
   } catch (err) {
-    console.error('[TeraBox API] RSA encryption failed:', (err as Error).message);
-    // Fallback: return raw data (will likely fail but better than nothing)
-    return data;
+    console.error('[TeraBox API] RSA encryption FAILED:', (err as Error).message);
+    console.error('[TeraBox API] ★ This likely means the pubkey format is wrong or node-forge is not installed');
+    console.error('[TeraBox API] ★ Without encryption, TeraBox will REJECT the email/password');
+    // Return empty string to signal failure — callers should check
+    // Returning raw data would send plaintext to TeraBox which will be rejected
+    throw new Error(`RSA encryption failed: ${(err as Error).message}`);
   }
 }
 
@@ -496,7 +499,7 @@ export async function getShareInfo(shorturl: string): Promise<{
       const res = await proxiedFetch(`${baseUrl}/api/shorturlinfo?${qs}`, {
         headers,
         redirect: 'follow',
-        signal: AbortSignal.timeout(15000),
+        signal: AbortSignal.timeout(25000),
         cache: 'no-store',
         proxyUrl: _proxyUrl || undefined,
       });
@@ -568,8 +571,10 @@ export async function loginToTerabox(
   }, extraHeaders);
 
   const errno = data.errno ?? data.error_code ?? data.code;
+  console.log(`[TeraBox API] login response: errno=${errno}`);
 
   if (errno === 0) {
+    console.log(`[TeraBox API] login SUCCESS — got bdstoken`);
     return {
       success: true,
       bdstoken: data.data?.bdstoken || data.bdstoken || '',
@@ -577,6 +582,17 @@ export async function loginToTerabox(
     };
   }
 
+  // Login may require captcha too
+  if (errno === 400090 || errno === 460030 || errno === 106) {
+    console.warn(`[TeraBox API] login needs captcha (errno ${errno}) — this needs to be handled by the caller`);
+    return {
+      success: false,
+      errno,
+      error: `Login requires captcha (errno ${errno})`,
+    };
+  }
+
+  console.warn(`[TeraBox API] login failed: errno=${errno}, msg=${data.errmsg || data.msg || ''}`);
   return {
     success: false,
     errno,
@@ -735,7 +751,7 @@ export async function visitShareLink(
     const res = await proxiedFetch(referralLink, {
       headers,
       redirect: 'follow',
-      signal: AbortSignal.timeout(15000),
+      signal: AbortSignal.timeout(25000),
       cache: 'no-store',
       proxyUrl: _proxyUrl || undefined,
     });

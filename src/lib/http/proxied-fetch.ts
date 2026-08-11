@@ -55,19 +55,40 @@ function nodeResponseToWebResponse(res: IncomingMessage, body: Buffer): Response
   // Build Headers object from node's raw headers
   const headers = new Headers();
   const rawHeaders = res.rawHeaders;
+  
+  // ★★★ CRITICAL: Collect ALL Set-Cookie headers (there can be multiple!)
+  // Standard Headers.set() would overwrite — we use Headers.append() for Set-Cookie
+  const setCookieHeaders: string[] = [];
+  
   for (let i = 0; i < rawHeaders.length; i += 2) {
+    const name = rawHeaders[i];
+    const value = rawHeaders[i + 1];
     try {
-      headers.append(rawHeaders[i], rawHeaders[i + 1]);
+      if (name.toLowerCase() === 'set-cookie') {
+        // Collect Set-Cookie headers separately for the getSetCookie() method
+        setCookieHeaders.push(value);
+        // Also append to Headers object (append preserves multiple values)
+        headers.append(name, value);
+      } else {
+        headers.append(name, value);
+      }
     } catch {
       // Skip invalid headers
     }
   }
 
-  return new Response(new Uint8Array(body), {
+  const response = new Response(new Uint8Array(body), {
     status: res.statusCode || 200,
     statusText: res.statusMessage || '',
     headers,
   });
+  
+  // ★ Attach getSetCookie() method so cookie parsing works
+  // Node.js Response has this natively, but our custom Response doesn't
+  // Without this, TeraBox cookie jar NEVER gets cookies → session breaks → captcha loop!
+  (response as any).headers.getSetCookie = () => setCookieHeaders;
+  
+  return response;
 }
 
 // ─── Proxied request via https.request() + HttpsProxyAgent ───
