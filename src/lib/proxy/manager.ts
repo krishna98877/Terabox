@@ -36,6 +36,7 @@
  */
 
 import { proxiedFetch } from '@/lib/http/proxied-fetch';
+import { isCaptchaErrno } from '@/lib/terabox/api';
 
 // ─── Types ───
 
@@ -225,11 +226,11 @@ async function fetchAllProxyScrapeTiers(): Promise<ProxyInfo[]> {
 // ─── Validate a single proxy ───
 // ★★★ TIERED VALIDATION: httpbin first (fast), then TeraBox (definitive) ★★★
 
-async function validateProxy(proxy: ProxyInfo, timeoutMs = 5000): Promise<boolean> {
-  // ★ Tier 1: Quick connectivity check via httpbin (fast, 2s timeout)
+async function validateProxy(proxy: ProxyInfo, timeoutMs = 8000): Promise<boolean> {
+  // ★ Tier 1: Quick connectivity check via httpbin (fast, 3s timeout)
   try {
     const res = await proxiedFetch('https://httpbin.org/ip', {
-      signal: AbortSignal.timeout(Math.min(timeoutMs, 2000)),
+      signal: AbortSignal.timeout(Math.min(timeoutMs, 3000)),
       cache: 'no-store',
       proxyUrl: proxy.url,
     });
@@ -249,7 +250,7 @@ async function validateProxy(proxy: ProxyInfo, timeoutMs = 5000): Promise<boolea
     const teraboxRes = await proxiedFetch(
       'https://www.1024terabox.com/api/shorturlinfo?shorturl=1_test&root=1&app_id=250528&web=1',
       {
-        signal: AbortSignal.timeout(timeoutMs),
+        signal: AbortSignal.timeout(6000),
         cache: 'no-store',
         proxyUrl: proxy.url,
         headers: {
@@ -273,7 +274,7 @@ async function validateProxy(proxy: ProxyInfo, timeoutMs = 5000): Promise<boolea
 
       // If TeraBox returned captcha-required on a simple API call,
       // this proxy IP is HIGH RISK — avoid it!
-      if (errno === 400090 || errno === 460030 || errno === 106) {
+      if (isCaptchaErrno(errno)) {
         console.warn(
           `[Proxy] ${proxy.host}:${proxy.port} flagged by TeraBox (errno ${errno}) — skipping`
         );

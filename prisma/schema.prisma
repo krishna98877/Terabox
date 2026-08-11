@@ -3,6 +3,9 @@ generator client {
   binaryTargets = ["native", "linux-musl-openssl-3.0.x", "debian-openssl-3.0.x"]
 }
 
+// ─── To switch to Supabase/PostgreSQL, change provider to "postgresql" ───
+// and set DATABASE_URL to: postgresql://postgres:[password]@db.[ref].supabase.co:5432/postgres
+// Also add: directUrl = env("DATABASE_DIRECT_URL")
 datasource db {
   provider = "sqlite"
   url      = env("DATABASE_URL")
