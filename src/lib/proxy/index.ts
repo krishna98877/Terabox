@@ -6,5 +6,6 @@ export {
   getProxyStatus,
   setCustomProxies,
   clearProxyPool,
+  isIPRoyalConfigured,
 } from './manager';
 export type { ProxyInfo } from './manager';

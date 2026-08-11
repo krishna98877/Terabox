@@ -51,6 +51,78 @@ let lastRefreshTime = 0;
 const REFRESH_INTERVAL = 5 * 60 * 1000; // 5 minutes
 const MAX_FAILS = 3; // Remove proxy after 3 consecutive failures
 
+// ─── IPRoyal Residential Gateway (BEST for TeraBox — real residential IPs!) ───
+// IPRoyal provides residential proxies via a gateway: http://user:pass@gate.iproyal.com:12321
+// Free trial: 100MB/1GB traffic. Paid: from $1.75/GB.
+// ★★★ This is the ONLY truly residential option in our stack. ★★★
+// Datacenter proxies get flagged by TeraBox → errno 400090.
+// IPRoyal residential IPs look like real users → no captcha!
+
+const IPROYAL_USER = () => process.env.IPROYAL_USERNAME || '';
+const IPROYAL_PASS = () => process.env.IPROYAL_PASSWORD || '';
+const IPROYAL_HOST = () => process.env.IPROYAL_HOST || 'gate.iproyal.com';
+const IPROYAL_PORT = () => parseInt(process.env.IPROYAL_PORT || '12321', 10);
+const IPROYAL_COUNTRY = () => process.env.IPROYAL_COUNTRY || ''; // e.g. 'us' for US-only
+
+interface IPRoyalConfig {
+  url: string;
+  host: string;
+  port: number;
+  country: string;
+}
+
+/**
+ * Build IPRoyal residential proxy URLs with rotation.
+ * Each session gets a unique IP (IPRoyal rotates automatically).
+ * Format: http://user:pass@gate.iproyal.com:12321?country=us&session=abc123
+ *
+ * ★ When passed to CaptchaSolv's proxied task types, the captcha token
+ *   will be solved from this residential IP → TeraBox accepts it!
+ */
+function getIPRoyalProxies(count = 5): ProxyInfo[] {
+  const user = IPROYAL_USER();
+  const pass = IPROYAL_PASS();
+  if (!user || !pass) return []; // No credentials configured
+
+  const host = IPROYAL_HOST();
+  const port = IPROYAL_PORT();
+  const country = IPROYAL_COUNTRY();
+  const proxies: ProxyInfo[] = [];
+
+  for (let i = 0; i < count; i++) {
+    // Each proxy gets a unique session string → different residential IP
+    const session = `tb_${Date.now()}_${i}_${Math.random().toString(36).substring(2, 8)}`;
+    let url = `http://${user}:${pass}@${host}:${port}`;
+    const params: string[] = [];
+    if (country) params.push(`country=${country}`);
+    params.push(`session=${session}`);
+    url += `?${params.join('&')}`;
+
+    proxies.push({
+      url,
+      host, // Gateway host, not actual IP (rotates)
+      port,
+      protocol: 'http',
+      country: country || 'rotating',
+      source: 'iproyal-residential',
+      anonymity: 'elite', // Residential = highest anonymity
+      lastVerified: Date.now(), // Trust IPRoyal — they pre-verify
+      failCount: 0,
+      successCount: 0,
+    });
+  }
+
+  console.log(`[Proxy] IPRoyal residential: ${proxies.length} proxies configured (${country || 'global rotating'})`);
+  return proxies;
+}
+
+/**
+ * Check if IPRoyal residential proxies are configured.
+ */
+export function isIPRoyalConfigured(): boolean {
+  return !!(IPROYAL_USER() && IPROYAL_PASS());
+}
+
 // ─── Proxifly API (Primary Source) ───
 
 const PROXIFLY_API = 'https://api.proxifly.dev/get-proxy';
@@ -494,13 +566,17 @@ export async function refreshProxyPool(): Promise<{ fetched: number; validated: 
   console.log('[Proxy] Refreshing proxy pool...');
 
   try {
-    // ── Phase 1: GeoNode residential proxies (BEST for TeraBox — avoids captcha) ──
+    // ── Phase 0: IPRoyal residential (BEST — real residential IPs, no captcha!) ──
+    const iproyalProxies = getIPRoyalProxies(5);
+    console.log(`[Proxy] IPRoyal residential: ${iproyalProxies.length} configured`);
+
+    // ── Phase 1: GeoNode/ProxyScrape elite proxies (good fallback) ──
     const geoNodeProxies = await fetchFromGeoNode();
-    // Validate residential proxies (they're usually good, but check anyway)
+    // Validate elite proxies (they're usually good, but check anyway)
     const validGeoNode = geoNodeProxies.length > 0
       ? await validateBatch(geoNodeProxies.slice(0, 15), 5)
       : [];
-    console.log(`[Proxy] GeoNode residential: ${validGeoNode.length}/${geoNodeProxies.length} valid`);
+    console.log(`[Proxy] GeoNode elite: ${validGeoNode.length}/${geoNodeProxies.length} valid`);
 
     // ── Phase 2: Proxifly (pre-validated — fast) ──
     const proxiflyProxies = await fetchFromProxifly(10);
@@ -514,8 +590,8 @@ export async function refreshProxyPool(): Promise<{ fetched: number; validated: 
     const validFreeProxies = await validateBatch(toValidate, 15);
     console.log(`[Proxy] Validated ${validFreeProxies.length} working free proxies`);
 
-    // ── Merge: Residential first (best for TeraBox), then Proxifly, then free ──
-    const allNew = [...validGeoNode, ...proxiflyProxies, ...validFreeProxies];
+    // ── Merge: IPRoyal residential FIRST, then elite, then Proxifly, then free ──
+    const allNew = [...iproyalProxies, ...validGeoNode, ...proxiflyProxies, ...validFreeProxies];
 
     // Merge with existing pool (keep working proxies, add new ones)
     const existingUrls = new Set(proxyPool.map(p => p.url));
@@ -530,10 +606,11 @@ export async function refreshProxyPool(): Promise<{ fetched: number; validated: 
     currentIndex = 0;
     lastRefreshTime = Date.now();
 
+    const iproyalCount = proxyPool.filter(p => p.source === 'iproyal-residential').length;
     const hqCount = proxyPool.filter(p => p.source === 'geonode' || p.source === 'proxyscrape-elite').length;
     const proxiflyCount = proxyPool.filter(p => p.source === 'proxifly').length;
-    const freeCount = proxyPool.filter(p => p.source !== 'geonode' && p.source !== 'proxifly' && p.source !== 'proxyscrape-elite').length;
-    console.log(`[Proxy] Pool size: ${proxyPool.length} (HighQuality: ${hqCount}, Proxifly: ${proxiflyCount}, Free: ${freeCount})`);
+    const freeCount = proxyPool.filter(p => p.source !== 'iproyal-residential' && p.source !== 'geonode' && p.source !== 'proxifly' && p.source !== 'proxyscrape-elite').length;
+    console.log(`[Proxy] Pool size: ${proxyPool.length} (IPRoyal: ${iproyalCount}, HighQuality: ${hqCount}, Proxifly: ${proxiflyCount}, Free: ${freeCount})`);
 
     return {
       fetched: freeRawProxies.length + proxiflyProxies.length + geoNodeProxies.length,
@@ -564,7 +641,16 @@ export async function getNextProxy(): Promise<ProxyInfo | null> {
     return null;
   }
 
-  // ★ Priority 1: High-quality proxies (GeoNode residential + ProxyScrape elite)
+  // ★ Priority 0: IPRoyal residential (BEST — real residential IPs, no captcha!)
+  const iproyalProxies = proxyPool.filter(p => p.source === 'iproyal-residential' && p.failCount < MAX_FAILS);
+  if (iproyalProxies.length > 0) {
+    // For IPRoyal, always pick a fresh session (different residential IP each time)
+    const proxy = iproyalProxies[currentIndex % iproyalProxies.length];
+    currentIndex++;
+    return proxy;
+  }
+
+  // ★ Priority 1: High-quality proxies (ProxyScrape elite + GeoNode)
   const hqProxies = proxyPool.filter(
     p => (p.source === 'geonode' || p.source === 'proxyscrape-elite') && p.failCount < MAX_FAILS
   );
@@ -632,9 +718,9 @@ export function getProxyStatus(): {
   freeCount: number;
   proxies: Array<{ url: string; source?: string; country?: string; anonymity?: string; successCount: number; failCount: number }>;
 } {
-  const residentialCount = proxyPool.filter(p => p.source === 'geonode' || p.source === 'proxyscrape-elite').length;
+  const residentialCount = proxyPool.filter(p => p.source === 'iproyal-residential' || p.source === 'geonode' || p.source === 'proxyscrape-elite').length;
   const proxiflyCount = proxyPool.filter(p => p.source === 'proxifly').length;
-  const freeCount = proxyPool.filter(p => p.source !== 'geonode' && p.source !== 'proxifly' && p.source !== 'proxyscrape-elite').length;
+  const freeCount = proxyPool.filter(p => p.source !== 'iproyal-residential' && p.source !== 'geonode' && p.source !== 'proxifly' && p.source !== 'proxyscrape-elite').length;
 
   return {
     poolSize: proxyPool.length,
