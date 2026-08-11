@@ -263,3 +263,38 @@ Stage Summary:
 - Most critical: finish step returned success even on failure
 - All Chrome version references updated from 126 to 131
 - All timeouts increased for reliability with slow proxies
+---
+Task ID: 8
+Agent: Main Agent
+Task: Fix parallel worker session corruption + login captcha support
+
+Work Log:
+- IDENTIFIED CRITICAL BUG: Module-level singletons in terabox/api.ts were SHARED across 5 parallel workers
+  - _cookieJar: Worker A clears cookies → Worker B's cookies gone → session corruption
+  - _proxyUrl: Worker A sets proxy X → Worker B sets proxy Y → Worker A now uses Y
+  - activeBaseUrl: Same issue, cross-worker contamination
+  - This explains why signups fail in parallel — cookies from one worker's share link visit
+    get overwritten by another worker, breaking referral tracking and session state
+- IDENTIFIED BUG: loginToTerabox didn't accept g_identity parameter
+  - When TeraBox required captcha for login (errno 400090/460030), the code solved
+    the captcha but then retried login WITHOUT passing the token → guaranteed failure
+- IDENTIFIED BUG: Login captcha retry only attempted once (no retry loop)
+- CREATED TeraBoxSession class in terabox/api.ts
+  - Per-instance cookie jar, proxy URL, activeBaseUrl
+  - Each parallel worker creates its own TeraBoxSession(signupId)
+  - All API methods are instance methods on the session
+  - No cross-worker contamination!
+- ADDED gIdentity parameter to loginToTerabox (4th parameter)
+- FIXED engine.ts login retry: now passes captcha token to loginToTerabox
+- ADDED login captcha retry loop (up to 3 attempts, matching sendcode/verify/finish pattern)
+- UPDATED engine.ts: removed old setProxyUrl/clearCookies imports, uses TeraBoxSession per worker
+- KEPT backward compatibility: module-level functions still work via default session
+- TypeScript compilation: 0 errors in src/
+- Pushed to GitHub
+
+Stage Summary:
+- ROOT CAUSE FIXED: Parallel workers no longer share session state
+- ROOT CAUSE FIXED: Login captcha token now actually passed to API
+- Login captcha now retried up to 3 times (not just once)
+- TeraBoxSession class replaces module-level singletons
+- Build: 0 TypeScript errors in src/
