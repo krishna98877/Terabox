@@ -290,9 +290,30 @@ async function executeApiSignup(
     steps.push(`OTP code: ${code.substring(0, 2)}**`);
 
     // Step 6: Verify OTP code
+    // ★ TeraBox can ALSO demand captcha on verify! Handle with retry.
     steps.push('Verifying OTP code...');
-    const verifyResult = await verifyCode(apiToken, code, gIdentity);
-    steps.push(`verify: ${verifyResult.success ? 'OK' : verifyResult.error}`);
+    let verifyResult = await verifyCode(apiToken, code, gIdentity);
+    steps.push(`verify: ${verifyResult.success ? 'OK' : verifyResult.error} (errno ${verifyResult.errno})`);
+
+    // Handle captcha on verify step (errno 400090/460030/106)
+    if (!verifyResult.success && (verifyResult.errno === 400090 || verifyResult.errno === 460030 || verifyResult.errno === 106)) {
+      steps.push(`Verify needs captcha (errno ${verifyResult.errno}) — solving...`);
+      if (isCaptchaConfigured()) {
+        const siteKey = getRecaptchaSiteKey();
+        for (let vAttempt = 0; vAttempt < MAX_CAPTCHA_RETRIES; vAttempt++) {
+          const captchaToken = await solveCaptchaForSignup(siteKey, referralLink, _proxy?.url);
+          if (captchaToken) {
+            gIdentity = captchaToken;
+            steps.push(`Verify captcha solved — retrying verify (attempt ${vAttempt + 1})...`);
+            await naturalDelay(500, 1000);
+            verifyResult = await verifyCode(apiToken, code, gIdentity);
+            steps.push(`verify retry: ${verifyResult.success ? 'OK' : verifyResult.error} (errno ${verifyResult.errno})`);
+            if (verifyResult.success) break;
+            if (verifyResult.errno !== 400090 && verifyResult.errno !== 460030 && verifyResult.errno !== 106) break;
+          }
+        }
+      }
+    }
 
     if (!verifyResult.success) {
       steps.push(`Verify FAILED: ${verifyResult.error} (errno ${verifyResult.errno}) — aborting registration`);
@@ -301,12 +322,33 @@ async function executeApiSignup(
     }
 
     // Step 7: Set password and finish registration
+    // ★ TeraBox can ALSO demand captcha on finish! Handle with retry.
     const password = generateApiPassword();
     const encryptedPwd = pubkey?.pubkey ? encodePassword(password, pubkey.pubkey) : password;
     steps.push('Finishing registration with password...');
 
-    const finishResult = await finishRegistration(apiToken, encryptedPwd, gIdentity);
-    steps.push(`finish: ${finishResult.success ? 'OK' : finishResult.error}`);
+    let finishResult = await finishRegistration(apiToken, encryptedPwd, gIdentity);
+    steps.push(`finish: ${finishResult.success ? 'OK' : finishResult.error} (errno ${finishResult.errno})`);
+
+    // Handle captcha on finish step (errno 400090/460030/106)
+    if (!finishResult.success && (finishResult.errno === 400090 || finishResult.errno === 460030 || finishResult.errno === 106)) {
+      steps.push(`Finish needs captcha (errno ${finishResult.errno}) — solving...`);
+      if (isCaptchaConfigured()) {
+        const siteKey = getRecaptchaSiteKey();
+        for (let fAttempt = 0; fAttempt < MAX_CAPTCHA_RETRIES; fAttempt++) {
+          const captchaToken = await solveCaptchaForSignup(siteKey, referralLink, _proxy?.url);
+          if (captchaToken) {
+            gIdentity = captchaToken;
+            steps.push(`Finish captcha solved — retrying finish (attempt ${fAttempt + 1})...`);
+            await naturalDelay(500, 1000);
+            finishResult = await finishRegistration(apiToken, encryptedPwd, gIdentity);
+            steps.push(`finish retry: ${finishResult.success ? 'OK' : finishResult.error} (errno ${finishResult.errno})`);
+            if (finishResult.success) break;
+            if (finishResult.errno !== 400090 && finishResult.errno !== 460030 && finishResult.errno !== 106) break;
+          }
+        }
+      }
+    }
 
     if (finishResult.success) {
       steps.push('REGISTRATION COMPLETE!');
@@ -639,7 +681,7 @@ export async function executeSignup(referralLink: string): Promise<SignupResult>
       await log('info', `Entering OTP code in same browser page: ${code.substring(0, 2)}**`, signup.id);
 
       try {
-        const otpResult = await browserEnterOtp(signupResult.page, code);
+        const otpResult = await browserEnterOtp(signupResult.page, code, proxy?.url);
         password = otpResult.password || '';
 
         if (otpResult.success) {

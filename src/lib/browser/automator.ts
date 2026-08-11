@@ -261,12 +261,18 @@ async function safeType(page: AnyPage, selector: string, text: string, timeout =
 
 /**
  * Attempt to solve reCAPTCHA on the page.
+ * ★★★ CRITICAL: proxyUrl MUST be passed!
+ * Without proxy, CaptchaSolv solves proxyless → token bound to CaptchaSolv's IP.
+ * But the browser is connected via proxy → TeraBox sees proxy IP ≠ CaptchaSolv IP → REJECTED.
+ * With proxy, CaptchaSolv solves from the proxy IP → token matches → accepted!
+ *
  * Strategy:
- * 1. If 2captcha API key is set, use it to solve
- * 2. Otherwise, try clicking the checkbox (sometimes it auto-passes with stealth)
- * 3. Wait and check if solved
+ * 1. If CaptchaSolv API key is set + proxyUrl, use proxied solve (IP-bound token)
+ * 2. If CaptchaSolv API key set but no proxy, use proxyless (risky — may be rejected)
+ * 3. Try clicking the checkbox (sometimes it auto-passes with stealth)
+ * 4. Wait and check if solved
  */
-async function handleRecaptcha(page: AnyPage, steps: string[]): Promise<boolean> {
+async function handleRecaptcha(page: AnyPage, steps: string[], proxyUrl?: string): Promise<boolean> {
   // Check if captcha is present and visible
   const captchaVisible = await page.evaluate(() => {
     const robotBox = document.querySelector('.robot-box') as HTMLElement;
@@ -282,38 +288,105 @@ async function handleRecaptcha(page: AnyPage, steps: string[]): Promise<boolean>
 
   steps.push('reCAPTCHA detected — attempting to solve...');
 
-  // Strategy 1: CaptchaSolv (solveRecaptcha tries v2 then v3)
+  // Strategy 1: CaptchaSolv with proxy (★★★ CORRECT WAY — IP-bound token ★★★)
   if (isCaptchaConfigured()) {
     try {
-      steps.push('Solving captcha via CaptchaSolv...');
+      steps.push(`Solving captcha via CaptchaSolv${proxyUrl ? ' (proxy-bound)' : ' (proxyless — risky!)'}...`);
       const siteKey = await page.evaluate(() => {
-        const iframe = document.querySelector('#robot iframe') as HTMLIFrameElement;
+        // Try multiple methods to extract sitekey
+        // Method 1: iframe src parameter
+        const iframe = document.querySelector('#robot iframe, .robot-box iframe, iframe[src*="recaptcha"]') as HTMLIFrameElement;
         if (iframe) {
-          const url = new URL(iframe.src);
-          return url.searchParams.get('k');
+          try {
+            const url = new URL(iframe.src);
+            return url.searchParams.get('k');
+          } catch {}
         }
+        // Method 2: data-sitekey attribute
         const siteKeyEl = document.querySelector('[data-sitekey]');
         if (siteKeyEl) return siteKeyEl.getAttribute('data-sitekey');
+        // Method 3: script src (enterprise.js or api.js)
+        const scripts = Array.from(document.querySelectorAll('script[src]'));
+        for (const s of scripts) {
+          const src = s.getAttribute('src') || '';
+          if (src.includes('recaptcha')) {
+            try {
+              const url = new URL(src);
+              return url.searchParams.get('render');
+            } catch {}
+          }
+        }
         return null;
       });
 
       if (siteKey) {
-        const token = await solveRecaptcha(siteKey, page.url());
+        // ★★★ PASS PROXY TO CaptchaSolv — this is the KEY fix! ★★★
+        // With proxy: CaptchaSolv solves from proxy IP → token bound to proxy IP → TeraBox accepts
+        // Without proxy: CaptchaSolv solves from their IP → token bound to CaptchaSolv IP → TeraBox REJECTS
+        const token = await solveRecaptcha(siteKey, page.url(), proxyUrl);
 
         if (token) {
-          await page.evaluate((t: string) => {
-            const textarea = document.querySelector('#g-recaptcha-response') as HTMLTextAreaElement;
+          // Inject the token into the page
+          // ★ Enterprise reCAPTCHA uses different internal structures than standard v2
+          // We try multiple injection methods to maximize compatibility
+          const injected = await page.evaluate((t: string) => {
+            // Method 1: Set textarea value + dispatch events
+            const textarea = document.querySelector('#g-recaptcha-response, .g-recaptcha-response') as HTMLTextAreaElement;
             if (textarea) {
               textarea.value = t;
               textarea.dispatchEvent(new Event('input', { bubbles: true }));
+              textarea.dispatchEvent(new Event('change', { bubbles: true }));
             }
-            const successCallback = (window as any).___grecaptcha_cfg?.clients?.['0']?.callback;
-            if (typeof successCallback === 'function') {
-              successCallback(t);
-            }
+
+            // Method 2: Call the reCAPTCHA callback directly
+            // Standard v2: ___grecaptcha_cfg.clients[0].callback
+            // Enterprise: ___grecaptcha_cfg.clients[0].callback
+            try {
+              const cfg = (window as any).___grecaptcha_cfg;
+              if (cfg?.clients) {
+                for (const [, client] of Object.entries(cfg.clients)) {
+                  const c = client as any;
+                  if (typeof c?.callback === 'function') {
+                    c.callback(t);
+                    return 'callback-invoked';
+                  }
+                }
+              }
+            } catch {}
+
+            // Method 3: Trigger via global callback function name
+            try {
+              const recaptchaElements = document.querySelectorAll('[data-callback]');
+              for (const el of recaptchaElements) {
+                const fnName = el.getAttribute('data-callback');
+                if (fnName && typeof (window as any)[fnName] === 'function') {
+                  (window as any)[fnName](t);
+                  return 'data-callback-invoked';
+                }
+              }
+            } catch {}
+
+            // Method 4: Dispatch custom event (some frameworks listen for this)
+            document.dispatchEvent(new CustomEvent('recaptcha-solved', { detail: { token: t } }));
+
+            return textarea ? 'textarea-set' : 'no-textarea';
           }, token);
-          steps.push('Captcha solved — token injected');
+
+          steps.push(`Captcha solved — token injected (${injected})`);
           await sleep(3000);
+
+          // Check if the captcha is actually resolved on the page
+          const captchaGone = await page.evaluate(() => {
+            const robotBox = document.querySelector('.robot-box') as HTMLElement;
+            if (!robotBox) return true;
+            const style = getComputedStyle(robotBox);
+            return style.display === 'none' || style.visibility === 'hidden';
+          });
+          if (captchaGone) {
+            steps.push('Captcha resolved — dialog gone');
+            return true;
+          }
+          steps.push('Token injected but captcha dialog still visible — continuing');
           return true;
         }
       } else {
@@ -376,7 +449,7 @@ async function handleRecaptcha(page: AnyPage, steps: string[]): Promise<boolean>
  * Navigate the TeraBox signup flow: Login → Sign Up → Email icon → Email form
  * Returns the page ready for email input.
  */
-async function navigateToSignupForm(page: AnyPage, steps: string[]): Promise<boolean> {
+async function navigateToSignupForm(page: AnyPage, steps: string[], proxyUrl?: string): Promise<boolean> {
   // Wait for page to be ready
   await sleep(3000);
 
@@ -411,7 +484,7 @@ async function navigateToSignupForm(page: AnyPage, steps: string[]): Promise<boo
   await sleep(3000);
 
   // Step 2: Handle captcha if it appears
-  await handleRecaptcha(page, steps);
+  await handleRecaptcha(page, steps, proxyUrl);
 
   // Step 3: Click Sign Up tab
   let signupClicked = false;
@@ -461,7 +534,7 @@ async function navigateToSignupForm(page: AnyPage, steps: string[]): Promise<boo
   await sleep(3000);
 
   // Step 5: Handle captcha again (it may re-appear after clicking email icon)
-  await handleRecaptcha(page, steps);
+  await handleRecaptcha(page, steps, proxyUrl);
 
   // Step 6: Look for Email/Phone tabs and select Email
   const emailTabClicked = await page.evaluate(() => {
@@ -632,7 +705,7 @@ export async function browserSignup(
     await sleep(5000);
 
     // Navigate to signup form
-    const navOk = await navigateToSignupForm(page, steps);
+    const navOk = await navigateToSignupForm(page, steps, proxy);
     if (!navOk) {
       steps.push('WARNING: Signup navigation incomplete — trying to continue anyway');
     }
@@ -653,7 +726,7 @@ export async function browserSignup(
     await sleep(5000);
 
     // Handle any popup captcha after clicking Continue
-    await handleRecaptcha(page, steps);
+    await handleRecaptcha(page, steps, proxy);
 
     steps.push('Email submitted — waiting for OTP');
 
@@ -680,6 +753,7 @@ export async function browserSignup(
 export async function browserEnterOtp(
   page: AnyPage,
   otpCode: string,
+  proxyUrl?: string,
 ): Promise<OtpEntryResult> {
   const steps: string[] = [];
 
@@ -784,6 +858,10 @@ export async function browserEnterOtp(
 
     await sleep(5000);
 
+    // ★ Handle captcha that may appear after OTP submission
+    // TeraBox sometimes re-challenges with captcha after OTP verify!
+    await handleRecaptcha(page, steps, proxyUrl);
+
     // Password step — TeraBox requires setting a password after OTP
     let password = '';
     const pwInputs: any[] = await page.$$('input[type="password"]');
@@ -864,7 +942,7 @@ export async function browserVerifyOtp(
     await sleep(5000);
 
     // Navigate to signup form
-    await navigateToSignupForm(page, steps);
+    await navigateToSignupForm(page, steps, proxy);
 
     // Fill email
     await fillEmailInput(page, email, steps);
@@ -876,10 +954,10 @@ export async function browserVerifyOtp(
     await sleep(5000);
 
     // Handle captcha
-    await handleRecaptcha(page, steps);
+    await handleRecaptcha(page, steps, proxy);
 
     // Enter OTP
-    const otpResult = await browserEnterOtp(page, otpCode);
+    const otpResult = await browserEnterOtp(page, otpCode, proxy);
     steps.push(...otpResult.steps);
 
     const ss = otpResult.screenshot || await takeScreenshot(page);
