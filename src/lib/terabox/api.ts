@@ -808,16 +808,23 @@ export function rsaEncrypt(data: string, pubkeyStr: string): string {
     const forge = require('node-forge');
     const pki = forge.pki;
 
-    const publicKey = pki.publicKeyFromPem(
-      '-----BEGIN PUBLIC KEY-----\n' +
-      pubkeyStr +
-      '\n-----END PUBLIC KEY-----'
-    );
+    // TeraBox returns raw base64 pubkey — need to wrap in PEM format
+    // But check if it already has PEM headers
+    let pemKey: string;
+    if (pubkeyStr.includes('-----BEGIN PUBLIC KEY-----')) {
+      pemKey = pubkeyStr;
+    } else {
+      // Split base64 into 64-char lines (PEM format requirement)
+      const lines = pubkeyStr.match(/.{1,64}/g) || [pubkeyStr];
+      pemKey = '-----BEGIN PUBLIC KEY-----\n' + lines.join('\n') + '\n-----END PUBLIC KEY-----';
+    }
+
+    const publicKey = pki.publicKeyFromPem(pemKey);
 
     const encrypted = publicKey.encrypt(data, 'RSAES-PKCS1-V1_5');
     return forge.util.encode64(encrypted);
   } catch (err) {
-    console.error('[TeraBox API] RSA encryption FAILED:', (err as Error).message);
+    console.error('[TeraBox API] RSA encryption FAILED:', (err as Error).message, '| pubkey length:', pubkeyStr?.length, '| pubkey preview:', pubkeyStr?.substring(0, 30));
     throw new Error(`RSA encryption failed: ${(err as Error).message}`);
   }
 }
