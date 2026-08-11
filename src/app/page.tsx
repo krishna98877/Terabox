@@ -15,6 +15,14 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+  DialogFooter,
+} from "@/components/ui/dialog";
 import { useToast } from "@/hooks/use-toast";
 import {
   Play,
@@ -43,6 +51,8 @@ import {
   WifiOff,
   Heart,
   Timer,
+  Eye,
+  ChevronDown,
 } from "lucide-react";
 
 // ─── Types ───
@@ -73,6 +83,7 @@ interface ActivityLog {
   type: string;
   message: string;
   signupId: string | null;
+  metadata: string | null;
   createdAt: string;
 }
 
@@ -176,6 +187,7 @@ export default function DashboardPage() {
   const [aiLoading, setAiLoading] = useState(false);
   const [activeTab, setActiveTab] = useState<"dashboard" | "history" | "config" | "logs">("dashboard");
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [detailLog, setDetailLog] = useState<ActivityLog | null>(null);
 
   // Config form
   const [masterLink, setMasterLink] = useState("");
@@ -944,7 +956,18 @@ export default function DashboardPage() {
                             <div className={`text-[11px] sm:text-xs font-medium ${logColors[log.type] || "text-zinc-400"} leading-snug`}>
                               {log.message}
                             </div>
-                            <div className="text-[10px] text-zinc-600 mt-0.5">{timeAgo(log.createdAt)}</div>
+                            <div className="flex items-center gap-2 mt-0.5">
+                              <span className="text-[10px] text-zinc-600">{timeAgo(log.createdAt)}</span>
+                              {(log.type === "error" || log.type === "warn") && (
+                                <button
+                                  onClick={() => setDetailLog(log)}
+                                  className="inline-flex items-center gap-1 text-[10px] text-zinc-500 hover:text-zinc-300 transition-colors"
+                                >
+                                  <Eye className="w-3 h-3" />
+                                  Detail
+                                </button>
+                              )}
+                            </div>
                           </div>
                         </div>
                       ))}
@@ -954,6 +977,86 @@ export default function DashboardPage() {
               </CardContent>
             </Card>
           )}
+
+          {/* ─── Log Detail Dialog ─── */}
+          <Dialog open={!!detailLog} onOpenChange={(open) => !open && setDetailLog(null)}>
+            <DialogContent className="bg-zinc-900 border-zinc-800 max-w-lg">
+              <DialogHeader>
+                <DialogTitle className="flex items-center gap-2 text-sm">
+                  <div className={`w-2 h-2 rounded-full ${detailLog ? logDots[detailLog.type] || "bg-zinc-600" : "bg-zinc-600"}`} />
+                  <span className={detailLog ? logColors[detailLog.type] || "text-zinc-400" : "text-zinc-400"}>
+                    {detailLog?.type?.toUpperCase()} Detail
+                  </span>
+                </DialogTitle>
+                <DialogDescription className="text-xs text-zinc-500">
+                  {detailLog?.createdAt ? new Date(detailLog.createdAt).toLocaleString() : ""}
+                </DialogDescription>
+              </DialogHeader>
+              <div className="space-y-3">
+                {/* Full error message */}
+                <div>
+                  <label className="text-[10px] uppercase tracking-wider text-zinc-500 mb-1 block">Message</label>
+                  <div className="bg-zinc-950 border border-zinc-800 rounded-md p-3 text-xs text-zinc-300 font-mono break-words whitespace-pre-wrap max-h-[120px] overflow-y-auto">
+                    {detailLog?.message}
+                  </div>
+                </div>
+                {/* Metadata */}
+                <div>
+                  <label className="text-[10px] uppercase tracking-wider text-zinc-500 mb-1 block">Metadata</label>
+                  <div className="bg-zinc-950 border border-zinc-800 rounded-md p-3 text-xs text-zinc-300 font-mono break-words whitespace-pre-wrap max-h-[200px] overflow-y-auto">
+                    {detailLog?.metadata
+                      ? (() => {
+                          try {
+                            return JSON.stringify(JSON.parse(detailLog.metadata), null, 2);
+                          } catch {
+                            return detailLog.metadata;
+                          }
+                        })()
+                      : "—"}
+                  </div>
+                </div>
+                {/* Signup ID if present */}
+                {detailLog?.signupId && (
+                  <div>
+                    <label className="text-[10px] uppercase tracking-wider text-zinc-500 mb-1 block">Signup ID</label>
+                    <div className="bg-zinc-950 border border-zinc-800 rounded-md p-3 text-xs text-zinc-300 font-mono break-all">
+                      {detailLog.signupId}
+                    </div>
+                  </div>
+                )}
+              </div>
+              <DialogFooter className="gap-2 sm:gap-2">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="text-xs border-zinc-700 text-zinc-300 hover:bg-zinc-800"
+                  onClick={() => {
+                    if (!detailLog) return;
+                    const fullDetail = [
+                      `Type: ${detailLog.type}`,
+                      `Time: ${new Date(detailLog.createdAt).toLocaleString()}`,
+                      `Message: ${detailLog.message}`,
+                      detailLog.metadata ? `Metadata: ${detailLog.metadata}` : null,
+                      detailLog.signupId ? `SignupID: ${detailLog.signupId}` : null,
+                    ].filter(Boolean).join("\n");
+                    navigator.clipboard.writeText(fullDetail);
+                    toast({ title: "Copied to clipboard", description: "Error detail copied — paste it to share" });
+                  }}
+                >
+                  <Copy className="w-3 h-3 mr-1" />
+                  Copy All
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="text-xs text-zinc-400 hover:bg-zinc-800"
+                  onClick={() => setDetailLog(null)}
+                >
+                  Close
+                </Button>
+              </DialogFooter>
+            </DialogContent>
+          </Dialog>
         </div>
       </main>
 
