@@ -188,6 +188,7 @@ export default function DashboardPage() {
   const [activeTab, setActiveTab] = useState<"dashboard" | "history" | "config" | "logs">("dashboard");
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [detailLog, setDetailLog] = useState<ActivityLog | null>(null);
+  const [captchaStatus, setCaptchaStatus] = useState<{ configured: boolean; keyValid?: boolean; balance?: number; error?: string; provider?: string | null } | null>(null);
 
   // Config form
   const [masterLink, setMasterLink] = useState("https://1024terabox.com/s/1_9hqBxA_U6WRc9FUhHl1zQ");
@@ -255,18 +256,25 @@ export default function DashboardPage() {
     } catch {}
   }, []);
 
+  const fetchCaptchaStatus = useCallback(async () => {
+    try {
+      const res = await fetch("/api/captcha/status");
+      setCaptchaStatus(await res.json());
+    } catch {}
+  }, []);
+
   const fetchAll = useCallback(async () => {
     setLoading(true);
-    await Promise.all([fetchConfig(), fetchStats(), fetchSignups(), fetchLogs(), fetchScheduler(), fetchProxy(), fetchKeepAlive()]);
+    await Promise.all([fetchConfig(), fetchStats(), fetchSignups(), fetchLogs(), fetchScheduler(), fetchProxy(), fetchKeepAlive(), fetchCaptchaStatus()]);
     setLoading(false);
-  }, [fetchConfig, fetchStats, fetchSignups, fetchLogs, fetchScheduler, fetchProxy, fetchKeepAlive]);
+  }, [fetchConfig, fetchStats, fetchSignups, fetchLogs, fetchScheduler, fetchProxy, fetchKeepAlive, fetchCaptchaStatus]);
 
   useEffect(() => {
     let mounted = true;
     const load = async () => {
       if (!mounted) return;
       setLoading(true);
-      await Promise.all([fetchConfig(), fetchStats(), fetchSignups(), fetchLogs(), fetchScheduler(), fetchProxy(), fetchKeepAlive()]);
+      await Promise.all([fetchConfig(), fetchStats(), fetchSignups(), fetchLogs(), fetchScheduler(), fetchProxy(), fetchKeepAlive(), fetchCaptchaStatus()]);
       if (mounted) setLoading(false);
     };
     load();
@@ -500,6 +508,28 @@ export default function DashboardPage() {
         </header>
 
         <div className="p-3 sm:p-6">
+          {/* ─── Captcha API Warning Banner ─── */}
+          {captchaStatus && (!captchaStatus.configured || (captchaStatus.configured && captchaStatus.keyValid === false)) && (
+            <div className="mb-4 p-3 rounded-lg bg-red-500/10 border border-red-500/30 flex items-center gap-3">
+              <Shield className="w-5 h-5 text-red-400 shrink-0" />
+              <div className="flex-1 min-w-0">
+                <div className="text-sm font-medium text-red-300">
+                  Captcha Solving {!captchaStatus.configured ? 'Not Configured' : 'API Key Invalid'}
+                </div>
+                <div className="text-xs text-red-400/70 mt-0.5">
+                  {captchaStatus.error || 'Set CAPTCHASOLV_API_KEY in .env — get a key from captchasolv.com (100 free solves/day)'}
+                </div>
+              </div>
+            </div>
+          )}
+          {captchaStatus && captchaStatus.configured && captchaStatus.keyValid && (
+            <div className="mb-4 p-2.5 rounded-lg bg-emerald-500/10 border border-emerald-500/20 flex items-center gap-2">
+              <Shield className="w-4 h-4 text-emerald-400 shrink-0" />
+              <span className="text-xs text-emerald-300">
+                CaptchaSolv active — Balance: ${captchaStatus.balance?.toFixed(4) || '0'}
+              </span>
+            </div>
+          )}
           {/* ─── Dashboard Tab ─── */}
           {activeTab === "dashboard" && (
             <div className="space-y-4 sm:space-y-6">
@@ -879,7 +909,16 @@ export default function DashboardPage() {
                 </CardHeader>
                 <CardContent className="space-y-4">
                   <div>
-                    <label className="text-xs text-zinc-500 block mb-1.5">Master Referral Link</label>
+                    <div className="flex items-center justify-between mb-1.5">
+                      <label className="text-xs text-zinc-500 block">Master Referral Link</label>
+                      <button
+                        onClick={() => setMasterLink("https://1024terabox.com/s/1_9hqBxA_U6WRc9FUhHl1zQ")}
+                        className="text-[10px] text-violet-400 hover:text-violet-300 transition-colors flex items-center gap-1"
+                      >
+                        <RefreshCw className="w-3 h-3" />
+                        Reset to Default
+                      </button>
+                    </div>
                     <Input
                       value={masterLink}
                       onChange={(e) => setMasterLink(e.target.value)}
@@ -919,6 +958,44 @@ export default function DashboardPage() {
                       className="bg-zinc-800 border-zinc-700 text-sm"
                     />
                     <p className="text-[10px] text-zinc-600 mt-1">Workers pause when daily limit is reached, resume next day</p>
+                  </div>
+                </CardContent>
+              </Card>
+
+              {/* CaptchaSolv API Key Status */}
+              <Card className="bg-zinc-900 border-zinc-800">
+                <CardHeader className="pb-3">
+                  <CardTitle className="text-sm font-medium flex items-center gap-2">
+                    <Shield className="w-4 h-4 text-violet-400" />
+                    Captcha Solving
+                  </CardTitle>
+                </CardHeader>
+                <CardContent className="space-y-3">
+                  {captchaStatus?.configured && captchaStatus.keyValid ? (
+                    <div className="flex items-center gap-2 p-2.5 rounded-lg bg-emerald-500/10 border border-emerald-500/20">
+                      <CheckCircle2 className="w-4 h-4 text-emerald-400" />
+                      <div>
+                        <div className="text-xs font-medium text-emerald-300">CaptchaSolv Active</div>
+                        <div className="text-[10px] text-emerald-400/70">Balance: ${captchaStatus.balance?.toFixed(4) || '0'} — 100 free solves/day</div>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="flex items-center gap-2 p-2.5 rounded-lg bg-red-500/10 border border-red-500/20">
+                      <XCircle className="w-4 h-4 text-red-400" />
+                      <div>
+                        <div className="text-xs font-medium text-red-300">
+                          {captchaStatus?.configured ? 'API Key Invalid' : 'Not Configured'}
+                        </div>
+                        <div className="text-[10px] text-red-400/70">
+                          {captchaStatus?.error || 'Set CAPTCHASOLV_API_KEY in .env file'}
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                  <div className="text-[10px] text-zinc-500">
+                    Get an API key from <span className="text-violet-400">captchasolv.com</span> — 
+                    use Discord <span className="font-mono text-zinc-400">/claim</span> or Telegram bot for 100 free solves/day. 
+                    Then set it as <span className="font-mono text-zinc-400">CAPTCHASOLV_API_KEY</span> in your <span className="font-mono text-zinc-400">.env</span> file and restart.
                   </div>
                 </CardContent>
               </Card>
@@ -980,7 +1057,7 @@ export default function DashboardPage() {
 
           {/* ─── Log Detail Dialog ─── */}
           <Dialog open={!!detailLog} onOpenChange={(open) => !open && setDetailLog(null)}>
-            <DialogContent className="bg-zinc-900 border-zinc-800 max-w-lg">
+            <DialogContent className="bg-zinc-900 border-zinc-800 max-w-2xl">
               <DialogHeader>
                 <DialogTitle className="flex items-center gap-2 text-sm">
                   <div className={`w-2 h-2 rounded-full ${detailLog ? logDots[detailLog.type] || "bg-zinc-600" : "bg-zinc-600"}`} />
@@ -996,23 +1073,40 @@ export default function DashboardPage() {
                 {/* Full error message */}
                 <div>
                   <label className="text-[10px] uppercase tracking-wider text-zinc-500 mb-1 block">Message</label>
-                  <div className="bg-zinc-950 border border-zinc-800 rounded-md p-3 text-xs text-zinc-300 font-mono break-words whitespace-pre-wrap max-h-[120px] overflow-y-auto">
+                  <div className="bg-zinc-950 border border-zinc-800 rounded-md p-3 text-xs text-zinc-300 font-mono break-words whitespace-pre-wrap max-h-[160px] overflow-y-auto">
                     {detailLog?.message}
                   </div>
                 </div>
-                {/* Metadata */}
+                {/* Metadata — structured view */}
                 <div>
-                  <label className="text-[10px] uppercase tracking-wider text-zinc-500 mb-1 block">Metadata</label>
-                  <div className="bg-zinc-950 border border-zinc-800 rounded-md p-3 text-xs text-zinc-300 font-mono break-words whitespace-pre-wrap max-h-[200px] overflow-y-auto">
+                  <label className="text-[10px] uppercase tracking-wider text-zinc-500 mb-1 block">Technical Details</label>
+                  <div className="bg-zinc-950 border border-zinc-800 rounded-md p-3 text-xs text-zinc-300 font-mono break-words whitespace-pre-wrap max-h-[400px] overflow-y-auto">
                     {detailLog?.metadata
                       ? (() => {
                           try {
-                            return JSON.stringify(JSON.parse(detailLog.metadata), null, 2);
+                            const parsed = JSON.parse(detailLog.metadata);
+                            // Render key-value pairs for better readability
+                            const lines: string[] = [];
+                            for (const [key, value] of Object.entries(parsed)) {
+                              if (key === 'rawResponse' && typeof value === 'object' && value !== null) {
+                                lines.push(`── ${key} ──`);
+                                lines.push(JSON.stringify(value, null, 2));
+                              } else if (key === 'stack' && typeof value === 'string') {
+                                lines.push(`── Stack Trace ──`);
+                                lines.push(value);
+                              } else if (key === 'steps' && Array.isArray(value)) {
+                                lines.push(`── Steps ──`);
+                                value.forEach((s: string, i: number) => lines.push(`  ${i + 1}. ${s}`));
+                              } else {
+                                lines.push(`${key}: ${typeof value === 'object' ? JSON.stringify(value) : value}`);
+                              }
+                            }
+                            return lines.join("\n");
                           } catch {
                             return detailLog.metadata;
                           }
                         })()
-                      : "—"}
+                      : "No metadata available"}
                   </div>
                 </div>
                 {/* Signup ID if present */}
@@ -1032,11 +1126,19 @@ export default function DashboardPage() {
                   className="text-xs border-zinc-700 text-zinc-300 hover:bg-zinc-800"
                   onClick={() => {
                     if (!detailLog) return;
+                    let metadataStr = '';
+                    if (detailLog.metadata) {
+                      try {
+                        metadataStr = JSON.stringify(JSON.parse(detailLog.metadata), null, 2);
+                      } catch {
+                        metadataStr = detailLog.metadata;
+                      }
+                    }
                     const fullDetail = [
                       `Type: ${detailLog.type}`,
                       `Time: ${new Date(detailLog.createdAt).toLocaleString()}`,
                       `Message: ${detailLog.message}`,
-                      detailLog.metadata ? `Metadata: ${detailLog.metadata}` : null,
+                      metadataStr ? `\nMetadata:\n${metadataStr}` : null,
                       detailLog.signupId ? `SignupID: ${detailLog.signupId}` : null,
                     ].filter(Boolean).join("\n");
                     navigator.clipboard.writeText(fullDetail);

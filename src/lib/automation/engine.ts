@@ -260,7 +260,15 @@ async function executeApiSignup(
 
     if (!sendResult.success) {
       steps.push(`sendcode failed: ${sendResult.error}`);
-      await log('warn', `API sendcode failed: ${sendResult.error}`, signupId, { errno: sendResult.errno, captchaRetries: sendResult.needsCaptcha ? MAX_CAPTCHA_RETRIES : 0 });
+      await log('error', `API sendcode failed: ${sendResult.error}`, signupId, {
+        errno: sendResult.errno,
+        needsCaptcha: sendResult.needsCaptcha,
+        captchaRetries: sendResult.needsCaptcha ? MAX_CAPTCHA_RETRIES : 0,
+        captchaConfigured: isCaptchaConfigured(),
+        proxyUsed: _proxy?.url || 'direct',
+        email: email.substring(0, 3) + '***' + email.split('@')[1],
+        rawResponse: sendResult.rawResponse,
+      });
       return { success: false, error: sendResult.error, steps };
     }
 
@@ -353,7 +361,7 @@ async function executeApiSignup(
 
     if (!verifyResult.success) {
       steps.push(`Verify FAILED: ${verifyResult.error} (errno ${verifyResult.errno}) — aborting registration`);
-      await log('warn', `OTP verify failed: ${verifyResult.error}`, signupId, { errno: verifyResult.errno, codePrefix: code.substring(0, 2), apiTokenPrefix: apiToken.substring(0, 8) });
+      await log('error', `OTP verify failed: ${verifyResult.error}`, signupId, { errno: verifyResult.errno, codePrefix: code.substring(0, 2), apiTokenPrefix: apiToken.substring(0, 8), rawResponse: verifyResult.rawResponse });
       return { success: false, error: `OTP verify failed: ${verifyResult.error}`, steps };
     }
 
@@ -412,7 +420,7 @@ async function executeApiSignup(
 
     // Finish failed — this is a real failure, not a partial success
     steps.push(`Finish error: ${finishResult.error} (errno ${finishResult.errno})`);
-    await log('error', `Registration finish failed: ${finishResult.error}`, signupId, { errno: finishResult.errno });
+    await log('error', `Registration finish failed: ${finishResult.error}`, signupId, { errno: finishResult.errno, rawResponse: finishResult.rawResponse });
     return { success: false, error: `Finish failed: ${finishResult.error}`, steps };
 
   } catch (error) {
@@ -440,6 +448,26 @@ async function solveCaptchaForSignup(siteKey: string, pageUrl: string, proxyUrl?
     console.warn('[Engine] No captcha solver configured. Set CAPTCHASOLV_API_KEY (100 free/day)');
     return null;
   }
+  
+  // ★★★ Pre-flight check: Validate CaptchaSolv API key by checking balance
+  // This catches expired/invalid keys early instead of failing silently
+  try {
+    const { getBalance } = await import('@/lib/captcha');
+    const balanceResult = await getBalance();
+    if (balanceResult.error) {
+      console.error(`[Engine] ★★★ CAPTCHASOLV API KEY INVALID: ${balanceResult.error}`);
+      console.error('[Engine] Captcha solving will fail! Update CAPTCHASOLV_API_KEY in .env file');
+      return null;
+    }
+    if (balanceResult.balance <= 0) {
+      console.error(`[Engine] ★★★ CAPTCHASOLV BALANCE EMPTY: $${balanceResult.balance}`);
+      console.error('[Engine] Add funds at captchasolv.com or get a new key');
+      return null;
+    }
+  } catch {
+    // Balance check failed — continue anyway, the solve call will catch it
+  }
+  
   // ★★★ CRITICAL LOG: Show whether proxy is actually reaching the captcha solver
   console.log(`[Engine] solveCaptchaForSignup: siteKey=${siteKey.substring(0, 10)}..., proxyUrl=${proxyUrl || 'NONE (proxyless!)'}, pageUrl=${pageUrl.substring(0, 50)}...`);
   if (!proxyUrl) {
@@ -450,6 +478,8 @@ async function solveCaptchaForSignup(siteKey: string, pageUrl: string, proxyUrl?
   if (token) {
     const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
     console.log(`[Engine] Captcha solved in ${elapsed}s — token length: ${token.length}${proxyUrl ? ' (proxy-bound)' : ' (proxyless!)'}`);
+  } else {
+    console.error('[Engine] Captcha solve returned null — CaptchaSolv API may be down or key invalid');
   }
   return token;
 }
@@ -544,7 +574,7 @@ export async function executeSignup(referralLink: string): Promise<SignupResult>
 
     await log('info', 'Attempting API signup (passport/register_v4)...', signup.id);
     apiResult = await executeApiSignup(tempEmail.address, referralLink, signup.id, proxy, tbSession);
-    await log('info', `API signup result: ${apiResult.success ? 'SUCCESS' : apiResult.error}`, signup.id, { steps: apiResult.steps, error: apiResult.error, captchaConfigured: isCaptchaConfigured() });
+    await log(apiResult.success ? 'success' : 'error', `API signup result: ${apiResult.success ? 'SUCCESS' : apiResult.error}`, signup.id, { steps: apiResult.steps, error: apiResult.error, captchaConfigured: isCaptchaConfigured(), proxyUsed: proxy?.url || 'direct' });
 
     if (apiResult?.success) {
       // API signup succeeded — now do the REFERRAL TRACKING flow
@@ -893,7 +923,13 @@ export async function executeSignup(referralLink: string): Promise<SignupResult>
       where: { id: signup.id },
       data: { status: 'failed', errorMessage: errMsg },
     });
-    await log('error', `Signup failed: ${errMsg}`, signup.id);
+    const errStack = (error as Error).stack || '';
+    await log('error', `Signup failed: ${errMsg}`, signup.id, {
+      error: errMsg,
+      stack: errStack,
+      proxyUsed: proxy?.url || 'direct',
+      errorType: (error as Error).constructor?.name || 'Error',
+    });
     if (proxy) markProxyFailed(proxy.url);
     return { success: false, email: '', status: 'failed', error: errMsg, signupId: signup.id, proxyUsed: proxy?.url };
   }

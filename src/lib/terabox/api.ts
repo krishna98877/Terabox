@@ -252,6 +252,7 @@ export class TeraBoxSession {
     needsCaptcha?: boolean;
     error?: string;
     errno?: number;
+    rawResponse?: Record<string, unknown>;
   }> {
     const bodyParams: Record<string, unknown> = {
       email,
@@ -279,7 +280,7 @@ export class TeraBoxSession {
     );
 
     const errno = data.errno ?? data.error_code ?? data.code;
-    console.log(`[TeraBox ${this.sessionId}] sendcode response: errno=${errno}, data=${JSON.stringify(data).substring(0, 200)}`);
+    console.log(`[TeraBox ${this.sessionId}] sendcode response: errno=${errno}, data=${JSON.stringify(data).substring(0, 300)}`);
 
     if (errno === 0) {
       console.log(`[TeraBox ${this.sessionId}] sendcode SUCCESS — OTP sent to email`);
@@ -298,6 +299,7 @@ export class TeraBoxSession {
         needsCaptcha: true,
         errno,
         error: `Need reCAPTCHA verification (errno ${errno})`,
+        rawResponse: data,
       };
     }
 
@@ -306,6 +308,7 @@ export class TeraBoxSession {
       success: false,
       errno,
       error: data.errmsg || data.msg || `Error ${errno}`,
+      rawResponse: data,
     };
   }
 
@@ -320,6 +323,7 @@ export class TeraBoxSession {
     success: boolean;
     error?: string;
     errno?: number;
+    rawResponse?: Record<string, unknown>;
   }> {
     const bodyParams: Record<string, unknown> = {
       token,
@@ -336,7 +340,7 @@ export class TeraBoxSession {
     );
 
     const errno = data.errno ?? data.error_code ?? data.code;
-    console.log(`[TeraBox ${this.sessionId}] verify response: errno=${errno}, g_identity=${gIdentity ? 'provided' : 'none'}`);
+    console.log(`[TeraBox ${this.sessionId}] verify response: errno=${errno}, data=${JSON.stringify(data).substring(0, 300)}, g_identity=${gIdentity ? 'provided' : 'none'}`);
 
     if (errno === 0) {
       console.log(`[TeraBox ${this.sessionId}] verify SUCCESS — OTP verified`);
@@ -348,6 +352,7 @@ export class TeraBoxSession {
       success: false,
       errno,
       error: data.errmsg || data.msg || `Verify error ${errno}`,
+      rawResponse: data,
     };
   }
 
@@ -362,6 +367,7 @@ export class TeraBoxSession {
     success: boolean;
     error?: string;
     errno?: number;
+    rawResponse?: Record<string, unknown>;
   }> {
     const bodyParams: Record<string, unknown> = {
       token,
@@ -380,7 +386,7 @@ export class TeraBoxSession {
     );
 
     const errno = data.errno ?? data.error_code ?? data.code;
-    console.log(`[TeraBox ${this.sessionId}] finish response: errno=${errno}, g_identity=${gIdentity ? 'provided' : 'none'}`);
+    console.log(`[TeraBox ${this.sessionId}] finish response: errno=${errno}, data=${JSON.stringify(data).substring(0, 300)}, g_identity=${gIdentity ? 'provided' : 'none'}`);
 
     if (errno === 0) {
       console.log(`[TeraBox ${this.sessionId}] finish SUCCESS — registration complete`);
@@ -392,6 +398,7 @@ export class TeraBoxSession {
       success: false,
       errno,
       error: data.errmsg || data.msg || `Finish error ${errno}`,
+      rawResponse: data,
     };
   }
 
@@ -814,8 +821,13 @@ export function rsaEncrypt(data: string, pubkeyStr: string): string {
     if (pubkeyStr.includes('-----BEGIN PUBLIC KEY-----')) {
       pemKey = pubkeyStr;
     } else {
+      // ★★★ CRITICAL FIX: TeraBox uses URL-safe base64 (base64url) encoding!
+      // base64url uses '-' and '_' instead of '+' and '/'
+      // We must convert to standard base64 before creating PEM
+      let standardBase64 = pubkeyStr.replace(/-/g, '+').replace(/_/g, '/');
+      
       // Split base64 into 64-char lines (PEM format requirement)
-      const lines = pubkeyStr.match(/.{1,64}/g) || [pubkeyStr];
+      const lines = standardBase64.match(/.{1,64}/g) || [standardBase64];
       pemKey = '-----BEGIN PUBLIC KEY-----\n' + lines.join('\n') + '\n-----END PUBLIC KEY-----';
     }
 
