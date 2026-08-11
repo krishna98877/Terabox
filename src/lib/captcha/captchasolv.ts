@@ -98,6 +98,69 @@ const FATAL_ERRORS: Record<string, string> = {
   'ERROR_NO_SUCH_CAPCHA_ID': 'Task ID not found or expired (errorId 16)',
 };
 
+// ─── Proxy Helper ───
+
+/**
+ * ★★★ Parse proxy URL into 2captcha-compatible format ★★★
+ *
+ * CaptchaSolv (2captcha-compatible API) requires proxy as SEPARATE fields:
+ *   proxyType: "http" | "socks4" | "socks5"
+ *   proxyAddress: "1.2.3.4"
+ *   proxyPort: 8080
+ *   proxyLogin: "user" (optional)
+ *   proxyPassword: "pass" (optional)
+ *
+ * NOT a single URL string like task.proxy = "http://1.2.3.4:8080"!
+ * That was THE BUG causing CaptchaSolv to silently ignore the proxy →
+ * proxyless solving → token IP mismatch → TeraBox errno 400090 loop!
+ */
+function parseProxyForCaptcha(proxyUrl: string): Record<string, unknown> | null {
+  try {
+    const parsed = new URL(proxyUrl);
+    const protocol = parsed.protocol.replace(':', '');
+
+    // CaptchaSolv supports: http, https, socks4, socks5
+    // Map https → http (CONNECT tunnel handles it)
+    let proxyType: string;
+    if (protocol === 'https') {
+      proxyType = 'http';
+    } else if (['http', 'socks4', 'socks5'].includes(protocol)) {
+      proxyType = protocol;
+    } else {
+      console.warn(`[CaptchaSolv] Unsupported proxy protocol "${protocol}" — skipping proxy`);
+      return null;
+    }
+
+    // ★ URL parser strips default ports (80 for http, 443 for https, 1080 for socks)
+    // So we need to infer the port from the protocol if not explicitly in the URL
+    const explicitPort = parsed.port ? parseInt(parsed.port, 10) : 0;
+    const defaultPort = protocol === 'https' ? 443 : protocol === 'socks5' || protocol === 'socks4' ? 1080 : 80;
+    const port = explicitPort || defaultPort;
+    if (isNaN(port) || port <= 0 || port > 65535) {
+      console.warn(`[CaptchaSolv] Invalid proxy port: "${parsed.port}" → ${port} — skipping proxy`);
+      return null;
+    }
+
+    const proxyFields: Record<string, unknown> = {
+      proxyType,
+      proxyAddress: parsed.hostname,
+      proxyPort: port,
+    };
+
+    // Auth if present
+    if (parsed.username) proxyFields.proxyLogin = decodeURIComponent(parsed.username);
+    if (parsed.password) proxyFields.proxyPassword = decodeURIComponent(parsed.password);
+
+    console.log(
+      `[CaptchaSolv] Proxy parsed: type=${proxyType}, address=${parsed.hostname}, port=${proxyFields.proxyPort}${parsed.username ? ', auth=yes' : ''}`
+    );
+    return proxyFields;
+  } catch (err) {
+    console.warn(`[CaptchaSolv] Failed to parse proxy URL "${proxyUrl}": ${(err as Error).message}`);
+    return null;
+  }
+}
+
 // ─── Core API ───
 
 async function apiPost(
@@ -155,6 +218,14 @@ async function solveSync(
   }
 
   try {
+    // ★ Debug: Log what we're sending (mask sensitive parts)
+    const taskDebug = { ...task };
+    if (taskDebug.proxyAddress) {
+      console.log(`[CaptchaSolv] /solve request: type=${task.type}, proxy=${taskDebug.proxyType}://${taskDebug.proxyAddress}:${taskDebug.proxyPort}, siteKey=${(task.websiteKey as string)?.substring(0, 10)}...`);
+    } else {
+      console.log(`[CaptchaSolv] /solve request: type=${task.type}, PROXYLESS, siteKey=${(task.websiteKey as string)?.substring(0, 10)}...`);
+    }
+
     const res = await apiPost('/solve', body);
 
     // Success
@@ -183,6 +254,7 @@ async function solveSync(
     if (res.errorId > 0) {
       const errorCode = res.errorCode || `ERROR_${res.errorId}`;
       const errorDesc = res.errorDescription || errorCode;
+      console.warn(`[CaptchaSolv] API error: errorId=${res.errorId}, errorCode=${errorCode}, desc=${errorDesc}`);
 
       if (RETRYABLE_ERRORS.has(errorCode)) {
         return {
@@ -299,6 +371,7 @@ async function solveAsync(
   // Create task
   const createRes = await createTask(apiKey, task);
   if (!createRes.taskId) {
+    console.warn(`[CaptchaSolv] createTask failed: ${createRes.error} (type: ${task.type})`);
     return {
       success: false,
       error: createRes.error || 'Failed to create task',
@@ -440,9 +513,21 @@ export async function solveRecaptchaV2(
   }
 
   const task: Record<string, unknown> = { type: taskType, websiteURL: pageUrl, websiteKey: siteKey };
-  if (proxyUrl) task.proxy = proxyUrl;
+  // ★★★ CRITICAL: Use 2captcha-compatible proxy fields, NOT task.proxy = url!
+  // The old code did task.proxy = proxyUrl which CaptchaSolv silently ignores → proxyless → IP mismatch → token rejected!
+  if (proxyUrl) {
+    const proxyFields = parseProxyForCaptcha(proxyUrl);
+    if (proxyFields) {
+      Object.assign(task, proxyFields);
+      console.log(`[CaptchaSolv] Using PROXIED task type (${taskType}) — token will be bound to proxy IP`);
+    } else {
+      // Proxy parsing failed — fall back to proxyless (risky but better than nothing)
+      console.warn(`[CaptchaSolv] Proxy parsing failed — falling back to PROXYLESS (token may be rejected by TeraBox!)`);
+      task.type = invisible ? TASK_TYPES.RECAPTCHA_V2_INVISIBLE : TASK_TYPES.RECAPTCHA_V2;
+    }
+  }
 
-  console.log(`[CaptchaSolv] Solving reCAPTCHA v2${invisible ? ' (invisible)' : ''} for ${pageUrl.substring(0, 60)}...`);
+  console.log(`[CaptchaSolv] Solving reCAPTCHA v2${invisible ? ' (invisible)' : ''} for ${pageUrl.substring(0, 60)}... (task type: ${task.type})`);
 
   // Try sync first (fast when it works), fallback to async if sync fails with timeout/504
   for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
@@ -505,9 +590,19 @@ export async function solveRecaptchaV2Enterprise(
   }
 
   const task: Record<string, unknown> = { type: taskType, websiteURL: pageUrl, websiteKey: siteKey };
-  if (proxyUrl) task.proxy = proxyUrl;
+  // ★★★ CRITICAL: Use 2captcha-compatible proxy fields, NOT task.proxy = url!
+  if (proxyUrl) {
+    const proxyFields = parseProxyForCaptcha(proxyUrl);
+    if (proxyFields) {
+      Object.assign(task, proxyFields);
+      console.log(`[CaptchaSolv] Using PROXIED Enterprise task type (${taskType}) — token will be bound to proxy IP`);
+    } else {
+      console.warn(`[CaptchaSolv] Proxy parsing failed — falling back to PROXYLESS Enterprise (token may be rejected!)`);
+      task.type = invisible ? TASK_TYPES.RECAPTCHA_V2_ENTERPRISE_INVISIBLE : TASK_TYPES.RECAPTCHA_V2_ENTERPRISE;
+    }
+  }
 
-  console.log(`[CaptchaSolv] Solving reCAPTCHA v2 Enterprise${invisible ? ' (invisible)' : ''} for ${pageUrl.substring(0, 60)}... (async mode)`);
+  console.log(`[CaptchaSolv] Solving reCAPTCHA v2 Enterprise${invisible ? ' (invisible)' : ''} for ${pageUrl.substring(0, 60)}... (task type: ${task.type}, async mode)`);
   return solveWithRetryAsync(key, task, 'reCAPTCHA v2 Enterprise');
 }
 
@@ -529,12 +624,21 @@ export async function solveRecaptchaV3(
   const key = API_KEY();
   if (!key) return { success: false, error: 'CAPTCHASOLV_API_KEY not set' };
 
+  let taskType = proxyUrl ? TASK_TYPES.RECAPTCHA_V3_PROXY : TASK_TYPES.RECAPTCHA_V3;
   const task: Record<string, unknown> = {
-    type: proxyUrl ? TASK_TYPES.RECAPTCHA_V3_PROXY : TASK_TYPES.RECAPTCHA_V3,
+    type: taskType,
     websiteURL: pageUrl,
     websiteKey: siteKey,
   };
-  if (proxyUrl) task.proxy = proxyUrl;
+  // ★★★ CRITICAL: Use 2captcha-compatible proxy fields
+  if (proxyUrl) {
+    const proxyFields = parseProxyForCaptcha(proxyUrl);
+    if (proxyFields) {
+      Object.assign(task, proxyFields);
+    } else {
+      task.type = TASK_TYPES.RECAPTCHA_V3;
+    }
+  }
 
   // Per docs: score is "normal" (default) or "high" (for sites requiring score >= 0.7)
   task.score = minScore >= 0.7 ? 'high' : 'normal';
@@ -544,7 +648,7 @@ export async function solveRecaptchaV3(
     task.pageAction = action;
   }
 
-  console.log(`[CaptchaSolv] Solving reCAPTCHA v3 for ${pageUrl.substring(0, 60)}... (score: ${task.score}, action: ${action || 'default'})`);
+  console.log(`[CaptchaSolv] Solving reCAPTCHA v3 for ${pageUrl.substring(0, 60)}... (score: ${task.score}, action: ${action || 'default'}, task type: ${task.type})`);
   return solveWithRetry(key, task, 'reCAPTCHA v3');
 }
 
@@ -571,12 +675,20 @@ export async function solveRecaptchaV3Enterprise(
     websiteURL: pageUrl,
     websiteKey: siteKey,
   };
-  if (proxyUrl) task.proxy = proxyUrl;
+  // ★★★ CRITICAL: Use 2captcha-compatible proxy fields
+  if (proxyUrl) {
+    const proxyFields = parseProxyForCaptcha(proxyUrl);
+    if (proxyFields) {
+      Object.assign(task, proxyFields);
+    } else {
+      task.type = TASK_TYPES.RECAPTCHA_V3_ENTERPRISE;
+    }
+  }
 
   task.score = minScore >= 0.7 ? 'high' : 'normal';
   if (action) task.pageAction = action;
 
-  console.log(`[CaptchaSolv] Solving reCAPTCHA v3 Enterprise for ${pageUrl.substring(0, 60)}... (score: ${task.score})`);
+  console.log(`[CaptchaSolv] Solving reCAPTCHA v3 Enterprise for ${pageUrl.substring(0, 60)}... (score: ${task.score}, task type: ${task.type})`);
   return solveWithRetry(key, task, 'reCAPTCHA v3 Enterprise'); // v3 is fast (3-5s), sync is fine
 }
 

@@ -263,6 +263,9 @@ export async function sendVerificationCode(
     extraHeaders['fs-ex-st'] = '1';
   }
 
+  // ★ Debug: Log what we're sending to TeraBox
+  console.log(`[TeraBox API] sendcode: email=${email.substring(0, 5)}***, g_identity=${gIdentity ? `${gIdentity.substring(0, 15)}... (${gIdentity.length} chars)` : 'none'}, encrypted=${encrypted}`);
+
   const { data } = await passportPost(
     '/passport/register_v4/sendcode',
     bodyParams,
@@ -270,9 +273,11 @@ export async function sendVerificationCode(
   );
 
   const errno = data.errno ?? data.error_code ?? data.code;
+  console.log(`[TeraBox API] sendcode response: errno=${errno}, data=${JSON.stringify(data).substring(0, 200)}`);
 
   // Success
   if (errno === 0) {
+    console.log(`[TeraBox API] sendcode SUCCESS — OTP sent to email`);
     return {
       success: true,
       token: data.data?.token || data.token,
@@ -283,6 +288,7 @@ export async function sendVerificationCode(
 
   // Need reCAPTCHA
   if (errno === 400090 || errno === 460030 || errno === 106) {
+    console.warn(`[TeraBox API] sendcode needs captcha (errno ${errno}) — captcha token was ${gIdentity ? 'provided but rejected' : 'not provided'}`);
     return {
       success: false,
       needsCaptcha: true,
@@ -292,6 +298,7 @@ export async function sendVerificationCode(
   }
 
   // Other error
+  console.error(`[TeraBox API] sendcode error: errno=${errno}, msg=${data.errmsg || data.msg}`);
   return {
     success: false,
     errno,
@@ -326,11 +333,14 @@ export async function verifyCode(
   );
 
   const errno = data.errno ?? data.error_code ?? data.code;
+  console.log(`[TeraBox API] verify response: errno=${errno}, g_identity=${gIdentity ? 'provided' : 'none'}`);
 
   if (errno === 0) {
+    console.log(`[TeraBox API] verify SUCCESS — OTP verified`);
     return { success: true };
   }
 
+  console.warn(`[TeraBox API] verify failed: errno=${errno}, msg=${data.errmsg || data.msg || ''}`);
   return {
     success: false,
     errno,
@@ -367,11 +377,14 @@ export async function finishRegistration(
   );
 
   const errno = data.errno ?? data.error_code ?? data.code;
+  console.log(`[TeraBox API] finish response: errno=${errno}, g_identity=${gIdentity ? 'provided' : 'none'}`);
 
   if (errno === 0) {
+    console.log(`[TeraBox API] finish SUCCESS — registration complete`);
     return { success: true };
   }
 
+  console.warn(`[TeraBox API] finish failed: errno=${errno}, msg=${data.errmsg || data.msg || ''}`);
   return {
     success: false,
     errno,

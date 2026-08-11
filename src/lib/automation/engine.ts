@@ -217,7 +217,11 @@ async function executeApiSignup(
           steps.push(`Captcha solve attempt ${captchaAttempt + 1}/${MAX_CAPTCHA_RETRIES}...`);
           // ★ Pass proxy URL so CaptchaSolv uses *Task (with proxy) type
           // This makes the captcha token bound to the proxy IP → TeraBox accepts it!
-          const captchaToken = await solveCaptchaForSignup(siteKey, referralLink, _proxy?.url);
+          // ★★★ CRITICAL FIX: websiteURL must be the TeraBox MAIN page where reCAPTCHA is rendered,
+          // NOT the referral share link! TeraBox renders reCAPTCHA on the main page's signup modal.
+          // Using the share link as websiteURL causes token domain mismatch → rejected!
+          const teraboxPageUrl = 'https://www.1024terabox.com/';
+          const captchaToken = await solveCaptchaForSignup(siteKey, teraboxPageUrl, _proxy?.url);
 
           if (captchaToken) {
             gIdentity = captchaToken;
@@ -301,7 +305,8 @@ async function executeApiSignup(
       if (isCaptchaConfigured()) {
         const siteKey = getRecaptchaSiteKey();
         for (let vAttempt = 0; vAttempt < MAX_CAPTCHA_RETRIES; vAttempt++) {
-          const captchaToken = await solveCaptchaForSignup(siteKey, referralLink, _proxy?.url);
+          const teraboxPageUrl = 'https://www.1024terabox.com/';
+          const captchaToken = await solveCaptchaForSignup(siteKey, teraboxPageUrl, _proxy?.url);
           if (captchaToken) {
             gIdentity = captchaToken;
             steps.push(`Verify captcha solved — retrying verify (attempt ${vAttempt + 1})...`);
@@ -336,7 +341,8 @@ async function executeApiSignup(
       if (isCaptchaConfigured()) {
         const siteKey = getRecaptchaSiteKey();
         for (let fAttempt = 0; fAttempt < MAX_CAPTCHA_RETRIES; fAttempt++) {
-          const captchaToken = await solveCaptchaForSignup(siteKey, referralLink, _proxy?.url);
+          const teraboxPageUrl = 'https://www.1024terabox.com/';
+          const captchaToken = await solveCaptchaForSignup(siteKey, teraboxPageUrl, _proxy?.url);
           if (captchaToken) {
             gIdentity = captchaToken;
             steps.push(`Finish captcha solved — retrying finish (attempt ${fAttempt + 1})...`);
@@ -383,6 +389,11 @@ async function solveCaptchaForSignup(siteKey: string, pageUrl: string, proxyUrl?
   if (!isCaptchaConfigured()) {
     console.warn('[Engine] No captcha solver configured. Set CAPTCHASOLV_API_KEY (100 free/day)');
     return null;
+  }
+  // ★★★ CRITICAL LOG: Show whether proxy is actually reaching the captcha solver
+  console.log(`[Engine] solveCaptchaForSignup: siteKey=${siteKey.substring(0, 10)}..., proxyUrl=${proxyUrl || 'NONE (proxyless!)'}, pageUrl=${pageUrl.substring(0, 50)}...`);
+  if (!proxyUrl) {
+    console.warn('[Engine] ★★★ NO PROXY for captcha solving — token will be from CaptchaSolv IP, likely REJECTED by TeraBox (errno 400090 loop)!');
   }
   const startTime = Date.now();
   const token = await solveRecaptcha(siteKey, pageUrl, proxyUrl);
