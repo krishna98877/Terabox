@@ -200,58 +200,87 @@ export async function solveRecaptcha(siteKey: string, pageUrl: string, proxyUrl?
   try {
     // ★ Phase 1: Try v2 Enterprise + v2 Standard IN PARALLEL
     // This cuts solve time by ~50% since the first success wins
-    const [v2Ent, v2] = await Promise.allSettled([
-      solveRecaptchaV2Enterprise(siteKey, pageUrl, false, proxyUrl),
-      solveRecaptchaV2(siteKey, pageUrl, false, proxyUrl),
+    // ★★★ BUG FIX: Use Promise.race pattern with cancellation to avoid burning
+    // both captcha credits (100 free/day) when only one result is needed.
+    // Previously, Promise.allSettled waited for BOTH to complete even if the
+    // first one succeeded — wasting the second credit unnecessarily.
+    let v2Token: string | null = null;
+
+    const v2EntPromise = solveRecaptchaV2Enterprise(siteKey, pageUrl, false, proxyUrl);
+    const v2StdPromise = solveRecaptchaV2(siteKey, pageUrl, false, proxyUrl);
+
+    // Race: resolve as soon as either succeeds
+    const v2RaceResult = await Promise.race([
+      v2EntPromise.then(r => ({ source: 'ent' as const, result: r })),
+      v2StdPromise.then(r => ({ source: 'std' as const, result: r })),
     ]);
 
-    // Check Enterprise v2 result (TeraBox primarily uses Enterprise)
-    const v2EntResult = v2Ent.status === 'fulfilled' ? v2Ent.value : null;
-    if (v2EntResult?.success) {
-      const token = v2EntResult.solution?.token || v2EntResult.solution?.gRecaptchaResponse;
+    if (v2RaceResult.result.success) {
+      const token = v2RaceResult.result.solution?.token || v2RaceResult.result.solution?.gRecaptchaResponse;
       if (token) {
-        console.log(`[Captcha] Enterprise v2 solved${v2EntResult.solveTime ? ` in ${v2EntResult.solveTime.toFixed(1)}s` : ''}${v2EntResult.cost ? ` (cost: ${v2EntResult.cost})` : ''}`);
-        return token;
+        console.log(`[Captcha] ${v2RaceResult.source === 'ent' ? 'Enterprise' : 'Standard'} v2 solved (race winner)${v2RaceResult.result.solveTime ? ` in ${v2RaceResult.result.solveTime.toFixed(1)}s` : ''}${v2RaceResult.result.cost ? ` (cost: ${v2RaceResult.result.cost})` : ''}`);
+        v2Token = token;
       }
     }
 
-    // Check Standard v2 result
-    const v2Result = v2.status === 'fulfilled' ? v2.value : null;
-    if (v2Result?.success) {
-      const token = v2Result.solution?.token || v2Result.solution?.gRecaptchaResponse;
-      if (token) {
-        console.log(`[Captcha] Standard v2 solved${v2Result.solveTime ? ` in ${v2Result.solveTime.toFixed(1)}s` : ''}`);
-        return token;
-      }
+    // If race winner failed, check the other one (it might still be running)
+    if (!v2Token) {
+      const otherSource = v2RaceResult.source === 'ent' ? 'std' : 'ent';
+      const otherPromise = v2RaceResult.source === 'ent' ? v2StdPromise : v2EntPromise;
+      try {
+        const otherResult = await otherPromise;
+        if (otherResult.success) {
+          const token = otherResult.solution?.token || otherResult.solution?.gRecaptchaResponse;
+          if (token) {
+            console.log(`[Captcha] ${otherSource === 'ent' ? 'Enterprise' : 'Standard'} v2 solved (fallback)${otherResult.solveTime ? ` in ${otherResult.solveTime.toFixed(1)}s` : ''}`);
+            v2Token = token;
+          }
+        }
+      } catch {}
     }
 
-    console.warn(`[Captcha] v2 parallel failed — EntV2: ${v2EntResult?.error || 'rejected'}, V2: ${v2Result?.error || 'rejected'}`);
+    if (v2Token) return v2Token;
+
+    console.warn(`[Captcha] v2 parallel failed`);
 
     // ★ Phase 2: Try v3 variants in parallel (fast 3-5s each)
-    const [v3Ent, v3] = await Promise.allSettled([
-      solveRecaptchaV3Enterprise(siteKey, pageUrl, 0.3, 'register', proxyUrl),
-      solveRecaptchaV3(siteKey, pageUrl, 0.3, 'register', proxyUrl),
+    // Same race pattern to save credits
+    let v3Token: string | null = null;
+
+    const v3EntPromise = solveRecaptchaV3Enterprise(siteKey, pageUrl, 0.3, 'register', proxyUrl);
+    const v3StdPromise = solveRecaptchaV3(siteKey, pageUrl, 0.3, 'register', proxyUrl);
+
+    const v3RaceResult = await Promise.race([
+      v3EntPromise.then(r => ({ source: 'ent' as const, result: r })),
+      v3StdPromise.then(r => ({ source: 'std' as const, result: r })),
     ]);
 
-    const v3EntResult = v3Ent.status === 'fulfilled' ? v3Ent.value : null;
-    if (v3EntResult?.success) {
-      const token = v3EntResult.solution?.token || v3EntResult.solution?.gRecaptchaResponse;
+    if (v3RaceResult.result.success) {
+      const token = v3RaceResult.result.solution?.token || v3RaceResult.result.solution?.gRecaptchaResponse;
       if (token) {
-        console.log(`[Captcha] Enterprise v3 solved${v3EntResult.solveTime ? ` in ${v3EntResult.solveTime.toFixed(1)}s` : ''}`);
-        return token;
+        console.log(`[Captcha] ${v3RaceResult.source === 'ent' ? 'Enterprise' : 'Standard'} v3 solved (race winner)${v3RaceResult.result.solveTime ? ` in ${v3RaceResult.result.solveTime.toFixed(1)}s` : ''}`);
+        v3Token = token;
       }
     }
 
-    const v3Result = v3.status === 'fulfilled' ? v3.value : null;
-    if (v3Result?.success) {
-      const token = v3Result.solution?.token || v3Result.solution?.gRecaptchaResponse;
-      if (token) {
-        console.log(`[Captcha] Standard v3 solved${v3Result.solveTime ? ` in ${v3Result.solveTime.toFixed(1)}s` : ''}`);
-        return token;
-      }
+    if (!v3Token) {
+      const otherSource = v3RaceResult.source === 'ent' ? 'std' : 'ent';
+      const otherPromise = v3RaceResult.source === 'ent' ? v3StdPromise : v3EntPromise;
+      try {
+        const otherResult = await otherPromise;
+        if (otherResult.success) {
+          const token = otherResult.solution?.token || otherResult.solution?.gRecaptchaResponse;
+          if (token) {
+            console.log(`[Captcha] ${otherSource === 'ent' ? 'Enterprise' : 'Standard'} v3 solved (fallback)${otherResult.solveTime ? ` in ${otherResult.solveTime.toFixed(1)}s` : ''}`);
+            v3Token = token;
+          }
+        }
+      } catch {}
     }
 
-    console.error(`[Captcha] All strategies failed. EntV2: ${v2EntResult?.error}, V2: ${v2Result?.error}, EntV3: ${v3EntResult?.error}, V3: ${v3Result?.error}`);
+    if (v3Token) return v3Token;
+
+    console.error(`[Captcha] All strategies failed.`);
     return null;
   } catch (err) {
     console.error(`[Captcha] Fatal error: ${(err as Error).message}`);

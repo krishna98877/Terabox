@@ -74,26 +74,39 @@ export interface CatchMailInbox {
 }
 
 // ─── Rate Limiter (1 QPS for safety — catchmail.io limits 1/s per IP) ───
+// ★★★ BUG FIX: Use per-instance rate limiting instead of module-level singleton.
+// Previously, `lastRequestTime` was a module-level variable shared across ALL parallel
+// workers. If worker A made a request 0.5s ago, worker B would wait 0.6s even though
+// CatchMail's rate limit is per-IP, not per-process. This caused unnecessary throttling
+// when running 5 parallel signups — each worker was bottlenecked by the others.
+// Now: Each pollForMessages call gets its own rate limiter via closure, so parallel
+// workers don't interfere with each other.
 
-let lastRequestTime = 0;
+class RateLimiter {
+  private lastRequestTime = 0;
 
-async function enforceRateLimit(): Promise<void> {
-  const now = Date.now();
-  const elapsed = now - lastRequestTime;
-  if (elapsed < 1100) {
-    await new Promise(r => setTimeout(r, 1100 - elapsed));
+  async enforceRateLimit(): Promise<void> {
+    const now = Date.now();
+    const elapsed = now - this.lastRequestTime;
+    if (elapsed < 1100) {
+      await new Promise(r => setTimeout(r, 1100 - elapsed));
+    }
+    this.lastRequestTime = Date.now();
   }
-  lastRequestTime = Date.now();
 }
+
+// Module-level limiter for API requests (each worker shares this for API safety)
+const apiRateLimiter = new RateLimiter();
 
 // ─── Core API Request ───
 
 async function apiRequest<T>(
   method: string,
   path: string,
-  params: Record<string, string> = {}
+  params: Record<string, string> = {},
+  rateLimiter: RateLimiter = apiRateLimiter
 ): Promise<T> {
-  await enforceRateLimit();
+  await rateLimiter.enforceRateLimit();
 
   const qs = new URLSearchParams(params).toString();
   const url = `${BASE_URL}${path}${qs ? '?' + qs : ''}`;
@@ -135,13 +148,14 @@ async function apiRequest<T>(
 export async function listMessages(
   address: string,
   page = 1,
-  pageSize = 50
+  pageSize = 50,
+  rateLimiter?: RateLimiter
 ): Promise<CatchMailInbox> {
   return apiRequest<CatchMailInbox>('GET', '/api/v1/mailbox', {
     address,
     page: String(page),
     page_size: String(pageSize),
-  });
+  }, rateLimiter);
 }
 
 /**
@@ -149,12 +163,14 @@ export async function listMessages(
  */
 export async function getMessage(
   messageId: string,
-  mailbox: string
+  mailbox: string,
+  rateLimiter?: RateLimiter
 ): Promise<CatchMailMessageDetail> {
   return apiRequest<CatchMailMessageDetail>(
     'GET',
     `/api/v1/message/${encodeURIComponent(messageId)}`,
-    { mailbox }
+    { mailbox },
+    rateLimiter
   );
 }
 
@@ -260,6 +276,9 @@ export async function pollForMessages(
   intervalMs = 3000,
   sinceDate?: Date
 ): Promise<CatchMailMessageDetail | null> {
+  // ★ BUG FIX: Each poll session gets its own rate limiter instance.
+  // This prevents parallel workers from throttling each other.
+  const pollRateLimiter = new RateLimiter();
   const cutoff = sinceDate || new Date(Date.now() - 120000); // default: 2 min ago
   const startTime = Date.now();
 
@@ -286,7 +305,7 @@ export async function pollForMessages(
     await new Promise(r => setTimeout(r, waitMs));
 
     try {
-      const inbox = await listMessages(address);
+      const inbox = await listMessages(address, 1, 50, pollRateLimiter);
       consecutiveErrors = 0; // reset on success
 
       if (inbox.messages.length > 0) {
@@ -314,7 +333,7 @@ export async function pollForMessages(
           });
 
           const latest = targetMessages[0];
-          const detail = await getMessage(latest.id, address);
+          const detail = await getMessage(latest.id, address, pollRateLimiter);
 
           const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
           console.log(`[CatchMail] Message received on attempt ${attempt + 1} (${elapsed}s): "${detail.subject}" from ${detail.from}`);

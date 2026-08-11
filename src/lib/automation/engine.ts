@@ -171,7 +171,7 @@ async function executeApiSignup(
   signupId: string,
   _proxy: ProxyInfo | null,
   tbSession: TeraBoxSession
-): Promise<{ success: boolean; verificationCode?: string; password?: string; error?: string; steps: string[] }> {
+): Promise<{ success: boolean; verificationCode?: string; password?: string; error?: string; steps: string[]; pubkey?: string }> {
   const steps: string[] = [];
   let gIdentity: string | undefined;
 
@@ -279,10 +279,26 @@ async function executeApiSignup(
     if (link && !code) {
       steps.push('Found verification link instead of code');
       try {
-        await fetch(link, { redirect: 'follow', signal: AbortSignal.timeout(10000), cache: 'no-store' });
-        steps.push('Verification link visited');
-        return { success: true, steps };
-      } catch {}
+        // ★ BUG FIX: Use proxiedFetch instead of native fetch — verification link must
+        // go through the same proxy as all other TeraBox requests. Native fetch bypasses
+        // the proxy, causing TeraBox to see the server's direct IP → may flag as bot → fail.
+        const { proxiedFetch } = await import('@/lib/http/proxied-fetch');
+        const proxyUrl = _proxy?.url;
+        await proxiedFetch(link, {
+          redirect: 'follow',
+          signal: AbortSignal.timeout(10000),
+          cache: 'no-store',
+          proxyUrl,
+        });
+        steps.push('Verification link visited (via proxy)');
+        // ★ BUG FIX: Return password so the referral flow can use it for login.
+        // Previously returned only { success: true, steps } — missing password
+        // → referral flow at line ~536 does apiResult.password || '' → empty → login fails!
+        const password = generateApiPassword();
+        return { success: true, password, steps };
+      } catch (linkErr) {
+        steps.push(`Verification link visit failed: ${(linkErr as Error).message}`);
+      }
     }
 
     if (!code) {
@@ -363,7 +379,10 @@ async function executeApiSignup(
 
     if (finishResult.success) {
       steps.push('REGISTRATION COMPLETE!');
-      return { success: true, verificationCode: code, password, steps };
+      // ★ BUG FIX: Return pubkey so the referral flow can reuse it instead of
+      // calling getPubKey() again. The second getPubKey() could return a DIFFERENT key,
+      // causing login encryption to use a different key than what TeraBox expects → login fails!
+      return { success: true, verificationCode: code, password, steps, pubkey: pubkey?.pubkey };
     }
 
     // Finish failed — this is a real failure, not a partial success
@@ -495,7 +514,7 @@ export async function executeSignup(referralLink: string): Promise<SignupResult>
     // ── Step 2: Try API-first signup (TeraBox Passport API) ──
     // Always try API first — sendcode sometimes works without captcha.
     // If captcha required (errno 400090/460030), falls back to browser.
-    let apiResult: { success: boolean; verificationCode?: string; password?: string; error?: string; steps: string[] } | null = null;
+    let apiResult: { success: boolean; verificationCode?: string; password?: string; error?: string; steps: string[]; pubkey?: string } | null = null;
 
     await log('info', 'Attempting API signup (passport/register_v4)...', signup.id);
     apiResult = await executeApiSignup(tempEmail.address, referralLink, signup.id, proxy, tbSession);
@@ -531,11 +550,15 @@ export async function executeSignup(referralLink: string): Promise<SignupResult>
 
           if (shareInfo.success && shareInfo.shareid && shareInfo.uk) {
             // Step B: Login to get auth token (may require captcha)
-            const pubkey = await tbSession.getPubKey();
+            // ★ BUG FIX: Reuse the pubkey from registration (apiResult.pubkey) instead of
+            // calling getPubKey() again. A second getPubKey() call may return a DIFFERENT
+            // RSA key, causing login encryption to mismatch → "invalid credentials" error.
+            // Only fetch a new pubkey if the registration one wasn't saved (safety fallback).
+            const loginPubkey = apiResult.pubkey || (await tbSession.getPubKey())?.pubkey;
             let loginResult = await tbSession.loginToTerabox(
               tempEmail.address,
               apiResult.password || '',
-              pubkey?.pubkey
+              loginPubkey
             );
             referralSteps.push(`login: ${loginResult.success ? 'OK' : loginResult.error}`);
 
@@ -554,7 +577,7 @@ export async function executeSignup(referralLink: string): Promise<SignupResult>
                     loginResult = await tbSession.loginToTerabox(
                       tempEmail.address,
                       apiResult.password || '',
-                      pubkey?.pubkey,
+                      loginPubkey,
                       captchaToken // ← THIS WAS MISSING BEFORE!
                     );
                     referralSteps.push(`login retry: ${loginResult.success ? 'OK' : loginResult.error} (errno ${loginResult.errno})`);

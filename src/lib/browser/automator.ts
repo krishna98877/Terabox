@@ -649,7 +649,10 @@ async function httpSignup(referralLink: string, email: string, proxy?: string): 
 
     // Visit referral link (registers the referral cookie)
     steps.push('Fetching referral link...');
-    const res = await fetch(referralLink, { headers, redirect: 'follow', signal: AbortSignal.timeout(15000), cache: 'no-store' });
+    // ★ BUG FIX: Use proxiedFetch instead of native fetch — ensures proxy is used
+    // so the referral cookie is set properly and the server IP isn't exposed.
+    const { proxiedFetch } = await import('@/lib/http/proxied-fetch');
+    const res = await proxiedFetch(referralLink, { headers, redirect: 'follow', signal: AbortSignal.timeout(15000), cache: 'no-store', proxyUrl: proxy });
     if (res.ok) {
       const html = await res.text();
       steps.push(`Page fetched (${html.length} bytes)`);
@@ -691,10 +694,25 @@ export async function browserSignup(
     await page.setExtraHTTPHeaders({ 'Accept-Language': 'en-US,en;q=0.9' });
 
     // Stealth: override navigator properties
+    // ★ BUG FIX: navigator.plugins was set to [1, 2, 3, 4, 5] which is a massive
+    // anti-detection fingerprint. Real browsers return a PluginArray object, and
+    // bot detectors check that elements are Plugin objects (with name, filename, etc).
+    // Setting it to an array of numbers is an instant bot detection signal.
+    // Instead, we mimic a realistic plugins list with proper structure.
     await page.evaluateOnNewDocument(() => {
       Object.defineProperty(navigator, 'webdriver', { get: () => false });
       Object.defineProperty(navigator, 'languages', { get: () => ['en-US', 'en'] });
-      Object.defineProperty(navigator, 'plugins', { get: () => [1, 2, 3, 4, 5] });
+      // Realistic Chrome plugins: PDF Viewer, Chrome PDF Viewer, Chromium PDF Viewer
+      Object.defineProperty(navigator, 'plugins', {
+        get: () => {
+          const fakePlugins = [
+            { name: 'Chrome PDF Plugin', filename: 'internal-pdf-viewer', description: 'Portable Document Format', length: 1, 0: { type: 'application/x-google-chrome-pdf', suffixes: 'pdf', description: 'Portable Document Format' } },
+            { name: 'Chrome PDF Viewer', filename: 'mhjfbmdgcfjbbpajbifjhojgjbakbcgh', description: '', length: 1, 0: { type: 'application/pdf', suffixes: 'pdf', description: '' } },
+            { name: 'Native Client', filename: 'internal-nacl-plugin', description: 'Native Client Executable', length: 2, 0: { type: 'application/x-nacl', suffixes: 'nexe', description: 'Native Client Executable' }, 1: { type: 'application/x-pnacl', suffixes: 'pexe', description: 'Portable Native Client Executable' } },
+          ];
+          return Object.assign(fakePlugins, { length: 3, item: (i: number) => fakePlugins[i], namedItem: (name: string) => fakePlugins.find(p => p.name === name) || null, refresh: () => {} });
+        },
+      });
       (window as any).chrome = { runtime: {} };
     });
 
@@ -978,7 +996,10 @@ export async function browserVerify(
   const strategy = await detectStrategy();
   if (strategy === 'http-fallback') {
     try {
-      const res = await fetch(verificationLink, { headers: { 'User-Agent': getRandomUserAgent() }, redirect: 'follow', signal: AbortSignal.timeout(15000), cache: 'no-store' });
+      // ★ BUG FIX: Use proxiedFetch instead of native fetch — verification link
+      // must go through proxy to match the session's IP
+      const { proxiedFetch } = await import('@/lib/http/proxied-fetch');
+      const res = await proxiedFetch(verificationLink, { headers: { 'User-Agent': getRandomUserAgent() }, redirect: 'follow', signal: AbortSignal.timeout(15000), cache: 'no-store', proxyUrl: proxy });
       return { success: res.ok, steps: [`HTTP: ${res.status}`], proxyUsed: proxy };
     } catch (error) { return { success: false, steps: [`Error: ${(error as Error).message}`], proxyUsed: proxy }; }
   }

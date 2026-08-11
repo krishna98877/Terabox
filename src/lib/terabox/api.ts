@@ -403,9 +403,23 @@ export class TeraBoxSession {
     error?: string;
     errno?: number;
   }> {
-    const encryptedEmail = pubkey ? encryptEmail(email, pubkey) : email;
-    const encryptedPwd = pubkey ? encodePassword(password, pubkey) : password;
-    const isEncrypted = !!pubkey;
+    // ★ BUG FIX: Handle RSA encryption failure gracefully.
+    // Previously, if encryptEmail/encodePassword threw, the entire login would fail
+    // with an uncaught exception. Now we fall back to plaintext (some TeraBox
+    // endpoints accept unencrypted credentials).
+    let encryptedEmail: string;
+    let encryptedPwd: string;
+    let isEncrypted = false;
+    try {
+      encryptedEmail = pubkey ? encryptEmail(email, pubkey) : email;
+      encryptedPwd = pubkey ? encodePassword(password, pubkey) : password;
+      isEncrypted = !!pubkey && encryptedEmail !== email;
+    } catch (encErr) {
+      console.warn(`[TeraBox ${this.sessionId}] Login encryption failed: ${(encErr as Error).message} — trying plaintext`);
+      encryptedEmail = email;
+      encryptedPwd = password;
+      isEncrypted = false;
+    }
 
     const bodyParams: Record<string, unknown> = {
       username: encryptedEmail,

@@ -136,7 +136,10 @@ async function fetchFromProxyScrapeTier(tier: ProxyScrapeTier): Promise<ProxyInf
   const url = `${PROXYSCRAPE_BASE}?${qs}`;
 
   try {
-    const res = await fetch(url, {
+    // ★ BUG FIX: Use proxiedFetch instead of native fetch — ensures requests go through
+    // any configured outbound proxy. Native fetch bypasses proxy configuration,
+    // which can cause failures if the server is behind restricted networking.
+    const res = await proxiedFetch(url, {
       signal: AbortSignal.timeout(15000),
       cache: 'no-store',
     });

@@ -96,7 +96,8 @@ function nodeResponseToWebResponse(res: IncomingMessage, body: Buffer): Response
 function proxiedHttpRequest(
   url: string | URL,
   init: RequestInit,
-  proxyUrl: string
+  proxyUrl: string,
+  _redirectCount = 0 // ★ BUG FIX: Track redirect count to prevent infinite loops
 ): Promise<Response> {
   return new Promise((resolve, reject) => {
     const parsedUrl = new URL(url.toString());
@@ -126,11 +127,22 @@ function proxiedHttpRequest(
       agent,
     };
 
+    // ★ BUG FIX: Respect redirect: 'manual' option.
+    // Previously, proxiedHttpRequest always followed redirects (checking headers['follow'])
+    // which was always undefined → always followed. Now we check init.redirect properly.
+    const shouldFollowRedirects = (init as any).redirect !== 'manual';
+
     const httpModule = isHttps ? https : http;
     const req = httpModule.request(reqOptions, (res: IncomingMessage) => {
-      // Handle redirects (follow up to 5)
+      // Handle redirects (follow up to 5, unless redirect: 'manual')
       const statusCode = res.statusCode || 0;
-      if ((statusCode === 301 || statusCode === 302 || statusCode === 303 || statusCode === 307 || statusCode === 308) && headers['follow'] !== 'manual') {
+      if (shouldFollowRedirects && (statusCode === 301 || statusCode === 302 || statusCode === 303 || statusCode === 307 || statusCode === 308)) {
+        // ★ BUG FIX: Prevent infinite redirect loops (max 5)
+        if (_redirectCount >= 5) {
+          const body = Buffer.alloc(0);
+          resolve(nodeResponseToWebResponse(res, body));
+          return;
+        }
         // Consume response body to free up connection
         res.resume();
         const location = res.headers.location;
@@ -145,8 +157,8 @@ function proxiedHttpRequest(
             if (statusCode === 303) {
               delete redirectInit.body;
             }
-            // Follow redirect (recursive, but limited by native fetch behavior)
-            proxiedHttpRequest(redirectUrl, redirectInit, proxyUrl)
+            // Follow redirect (recursive, limited to 5 hops)
+            proxiedHttpRequest(redirectUrl, redirectInit, proxyUrl, _redirectCount + 1)
               .then(resolve)
               .catch(reject);
             return;
