@@ -53,6 +53,8 @@ import {
   encodePassword,
   encryptEmail,
   getRecaptchaSiteKey,
+  getRecaptchaSiteKeyDynamic,
+  isCaptchaErrno,
   extractSurlFromLink,
 } from '@/lib/terabox/api';
 import type { ProxyInfo } from '@/lib/proxy';
@@ -208,9 +210,10 @@ async function executeApiSignup(
     const MAX_CAPTCHA_RETRIES = 3;
     if (sendResult.needsCaptcha) {
       steps.push('reCAPTCHA required — attempting to solve...');
+      await log('info', `reCAPTCHA required by TeraBox (errno ${sendResult.errno}) — solving captcha...`, signupId, { errno: sendResult.errno });
 
       if (isCaptchaConfigured()) {
-        const siteKey = getRecaptchaSiteKey();
+        const siteKey = await getRecaptchaSiteKeyDynamic(_proxy?.url);
 
         for (let captchaAttempt = 0; captchaAttempt < MAX_CAPTCHA_RETRIES; captchaAttempt++) {
           steps.push(`Captcha solve attempt ${captchaAttempt + 1}/${MAX_CAPTCHA_RETRIES}...`);
@@ -231,12 +234,14 @@ async function executeApiSignup(
 
             if (sendResult.success) {
               steps.push('Captcha token accepted — OTP sent!');
+              await log('success', `Captcha solved & OTP sent (attempt ${captchaAttempt + 1})`, signupId, { tokenLen: captchaToken.length, solveAttempt: captchaAttempt + 1 });
               break; // Captcha worked, move on
             }
 
             // Captcha was solved but TeraBox still rejected it (token expired? wrong type?)
-            if (sendResult.needsCaptcha) {
+            if (sendResult.needsCaptcha || isCaptchaErrno(sendResult.errno)) {
               steps.push(`Token rejected (errno ${sendResult.errno}) — getting fresh token...`);
+              await log('warn', `Captcha token rejected by TeraBox (errno ${sendResult.errno})`, signupId, { errno: sendResult.errno, attempt: captchaAttempt + 1, tokenLen: captchaToken.length });
               continue; // Try again with a fresh captcha solve
             }
 
@@ -244,6 +249,7 @@ async function executeApiSignup(
             break;
           } else {
             steps.push(`Captcha solve attempt ${captchaAttempt + 1} failed — ${captchaAttempt < MAX_CAPTCHA_RETRIES - 1 ? 'retrying...' : 'giving up'}`);
+            await log('error', `Captcha solve failed (attempt ${captchaAttempt + 1}/${MAX_CAPTCHA_RETRIES})`, signupId, { siteKey: siteKey.substring(0, 10), pageUrl: teraboxPageUrl, proxyUsed: !!_proxy?.url });
           }
         }
       } else {
@@ -253,8 +259,17 @@ async function executeApiSignup(
 
     if (!sendResult.success) {
       steps.push(`sendcode failed: ${sendResult.error}`);
-      await log('warn', `API sendcode failed: ${sendResult.error}`, signupId, { errno: sendResult.errno });
+      await log('warn', `API sendcode failed: ${sendResult.error}`, signupId, { errno: sendResult.errno, captchaRetries: sendResult.needsCaptcha ? MAX_CAPTCHA_RETRIES : 0 });
       return { success: false, error: sendResult.error, steps };
+    }
+
+    // ★★★ CRITICAL FIX: Clear gIdentity after sendcode succeeds!
+    // The captcha token was consumed by sendcode — it's single-use.
+    // If we pass it to verify/finish, TeraBox rejects it (already used).
+    // verify/finish will solve a fresh captcha if they need one (handled below).
+    if (gIdentity) {
+      steps.push('Captcha token consumed by sendcode — clearing for verify step');
+      gIdentity = undefined;
     }
 
     const apiToken = sendResult.token || '';
@@ -315,10 +330,10 @@ async function executeApiSignup(
     steps.push(`verify: ${verifyResult.success ? 'OK' : verifyResult.error} (errno ${verifyResult.errno})`);
 
     // Handle captcha on verify step (errno 400090/460030/106)
-    if (!verifyResult.success && (verifyResult.errno === 400090 || verifyResult.errno === 460030 || verifyResult.errno === 106)) {
+    if (!verifyResult.success && isCaptchaErrno(verifyResult.errno)) {
       steps.push(`Verify needs captcha (errno ${verifyResult.errno}) — solving...`);
       if (isCaptchaConfigured()) {
-        const siteKey = getRecaptchaSiteKey();
+        const siteKey = await getRecaptchaSiteKeyDynamic(_proxy?.url);
         for (let vAttempt = 0; vAttempt < MAX_CAPTCHA_RETRIES; vAttempt++) {
           const teraboxPageUrl = 'https://www.1024terabox.com/';
           const captchaToken = await solveCaptchaForSignup(siteKey, teraboxPageUrl, _proxy?.url);
@@ -329,7 +344,7 @@ async function executeApiSignup(
             verifyResult = await tbSession.verifyCode(apiToken, code, gIdentity);
             steps.push(`verify retry: ${verifyResult.success ? 'OK' : verifyResult.error} (errno ${verifyResult.errno})`);
             if (verifyResult.success) break;
-            if (verifyResult.errno !== 400090 && verifyResult.errno !== 460030 && verifyResult.errno !== 106) break;
+            if (!isCaptchaErrno(verifyResult.errno)) break;
           }
         }
       }
@@ -337,8 +352,16 @@ async function executeApiSignup(
 
     if (!verifyResult.success) {
       steps.push(`Verify FAILED: ${verifyResult.error} (errno ${verifyResult.errno}) — aborting registration`);
-      await log('warn', `OTP verify failed: ${verifyResult.error}`, signupId, { errno: verifyResult.errno });
+      await log('warn', `OTP verify failed: ${verifyResult.error}`, signupId, { errno: verifyResult.errno, codePrefix: code.substring(0, 2), apiTokenPrefix: apiToken.substring(0, 8) });
       return { success: false, error: `OTP verify failed: ${verifyResult.error}`, steps };
+    }
+
+    // ★★★ CRITICAL FIX: Clear gIdentity after verify succeeds!
+    // Same as sendcode — the captcha token was consumed by verify.
+    // If we pass it to finish, TeraBox rejects it (already used).
+    if (gIdentity) {
+      steps.push('Captcha token consumed by verify — clearing for finish step');
+      gIdentity = undefined;
     }
 
     // Step 7: Set password and finish registration
@@ -357,10 +380,10 @@ async function executeApiSignup(
     steps.push(`finish: ${finishResult.success ? 'OK' : finishResult.error} (errno ${finishResult.errno})`);
 
     // Handle captcha on finish step (errno 400090/460030/106)
-    if (!finishResult.success && (finishResult.errno === 400090 || finishResult.errno === 460030 || finishResult.errno === 106)) {
+    if (!finishResult.success && isCaptchaErrno(finishResult.errno)) {
       steps.push(`Finish needs captcha (errno ${finishResult.errno}) — solving...`);
       if (isCaptchaConfigured()) {
-        const siteKey = getRecaptchaSiteKey();
+        const siteKey = await getRecaptchaSiteKeyDynamic(_proxy?.url);
         for (let fAttempt = 0; fAttempt < MAX_CAPTCHA_RETRIES; fAttempt++) {
           const teraboxPageUrl = 'https://www.1024terabox.com/';
           const captchaToken = await solveCaptchaForSignup(siteKey, teraboxPageUrl, _proxy?.url);
@@ -371,7 +394,7 @@ async function executeApiSignup(
             finishResult = await tbSession.finishRegistration(apiToken, encryptedPwd, gIdentity);
             steps.push(`finish retry: ${finishResult.success ? 'OK' : finishResult.error} (errno ${finishResult.errno})`);
             if (finishResult.success) break;
-            if (finishResult.errno !== 400090 && finishResult.errno !== 460030 && finishResult.errno !== 106) break;
+            if (!isCaptchaErrno(finishResult.errno)) break;
           }
         }
       }
@@ -379,6 +402,7 @@ async function executeApiSignup(
 
     if (finishResult.success) {
       steps.push('REGISTRATION COMPLETE!');
+      await log('success', 'Registration complete — password set', signupId);
       // ★ BUG FIX: Return pubkey so the referral flow can reuse it instead of
       // calling getPubKey() again. The second getPubKey() could return a DIFFERENT key,
       // causing login encryption to use a different key than what TeraBox expects → login fails!
@@ -387,6 +411,7 @@ async function executeApiSignup(
 
     // Finish failed — this is a real failure, not a partial success
     steps.push(`Finish error: ${finishResult.error} (errno ${finishResult.errno})`);
+    await log('error', `Registration finish failed: ${finishResult.error}`, signupId, { errno: finishResult.errno });
     return { success: false, error: `Finish failed: ${finishResult.error}`, steps };
 
   } catch (error) {
@@ -563,10 +588,10 @@ export async function executeSignup(referralLink: string): Promise<SignupResult>
             referralSteps.push(`login: ${loginResult.success ? 'OK' : loginResult.error}`);
 
             // ★★★ Handle captcha on login — NOW PASSES g_identity to retry!
-            if (!loginResult.success && (loginResult.errno === 400090 || loginResult.errno === 460030 || loginResult.errno === 106)) {
+            if (!loginResult.success && isCaptchaErrno(loginResult.errno)) {
               referralSteps.push(`Login needs captcha (errno ${loginResult.errno}) — solving...`);
               if (isCaptchaConfigured()) {
-                const siteKey = getRecaptchaSiteKey();
+                const siteKey = await getRecaptchaSiteKeyDynamic(proxy?.url);
                 const teraboxPageUrl = 'https://www.1024terabox.com/';
                 for (let lAttempt = 0; lAttempt < 3; lAttempt++) {
                   const captchaToken = await solveCaptchaForSignup(siteKey, teraboxPageUrl, proxy?.url);
@@ -582,7 +607,7 @@ export async function executeSignup(referralLink: string): Promise<SignupResult>
                     );
                     referralSteps.push(`login retry: ${loginResult.success ? 'OK' : loginResult.error} (errno ${loginResult.errno})`);
                     if (loginResult.success) break;
-                    if (loginResult.errno !== 400090 && loginResult.errno !== 460030 && loginResult.errno !== 106) break;
+                    if (!isCaptchaErrno(loginResult.errno)) break;
                   } else {
                     referralSteps.push(`Login captcha solve failed (attempt ${lAttempt + 1})`);
                   }

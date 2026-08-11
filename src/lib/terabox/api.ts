@@ -91,6 +91,18 @@ function getCommonParams(): Record<string, string | number> {
   };
 }
 
+// ─── Captcha Error Detection ───
+// TeraBox uses various errno values to indicate reCAPTCHA requirement.
+// errno 400090 = standard reCAPTCHA v2
+// errno 460030 = Enterprise reCAPTCHA (TeraBox's primary)
+// errno 106    = "verify captcha" (general)
+// errno 10     = rate limit / trigger captcha after too many requests
+// errno 18     = "captcha required" (alternate)
+export function isCaptchaErrno(errno: number | undefined | null): boolean {
+  if (errno == null) return false;
+  return errno === 400090 || errno === 460030 || errno === 106 || errno === 10 || errno === 18;
+}
+
 // ═══════════════════════════════════════════════════════════════════════
 // ★★★ TeraBoxSession — Per-worker isolated state ★★★
 // Each parallel worker creates its own session instance.
@@ -279,7 +291,7 @@ export class TeraBoxSession {
       };
     }
 
-    if (errno === 400090 || errno === 460030 || errno === 106) {
+    if (isCaptchaErrno(errno)) {
       console.warn(`[TeraBox ${this.sessionId}] sendcode needs captcha (errno ${errno}) — captcha token was ${gIdentity ? 'provided but rejected' : 'not provided'}`);
       return {
         success: false,
@@ -702,6 +714,90 @@ export class TeraBoxSession {
  */
 export function getRecaptchaSiteKey(): string {
   return process.env.RECAPTCHA_SITE_KEY || '6LceASUfAAAAAHBcvTdvuPVie_9yzavGubPLOGTH';
+}
+
+/**
+ * ★★★ Dynamic reCAPTCHA sitekey extraction from TeraBox page HTML.
+ * TeraBox rotates their sitekey — the hardcoded fallback may be stale.
+ * This fetches the actual signup/passport page and extracts the sitekey
+ * from the reCAPTCHA script tag or render() call in the HTML source.
+ *
+ * Extraction patterns (in order of priority):
+ * 1. ?k=SITEKEY in script src (e.g. .../recaptcha/enterprise.js?render=SITEKEY)
+ * 2. grecaptcha.render('...',{sitekey:'SITEKEY'}) in inline script
+ * 3. data-sitekey="SITEKEY" on a div element
+ */
+let _cachedSiteKey: string | null = null;
+let _cachedSiteKeyTime = 0;
+const SITEKEY_CACHE_TTL = 30 * 60 * 1000; // 30 min cache — sitekey rarely changes within a session
+
+export async function extractRecaptchaSiteKey(proxyUrl?: string): Promise<string | null> {
+  // Return cached if fresh
+  if (_cachedSiteKey && Date.now() - _cachedSiteKeyTime < SITEKEY_CACHE_TTL) {
+    return _cachedSiteKey;
+  }
+
+  for (const baseUrl of BASE_URLS) {
+    try {
+      // Try the main page first — reCAPTCHA is rendered on signup modal
+      const res = await proxiedFetch(`${baseUrl}/`, {
+        headers: {
+          'User-Agent': `Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${CHROME_FULL_VERSION} Safari/537.36`,
+          'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+        },
+        redirect: 'follow',
+        signal: AbortSignal.timeout(15000),
+        cache: 'no-store',
+        proxyUrl: proxyUrl || undefined,
+      });
+
+      const html = await res.text();
+
+      // Pattern 1: enterprise.js?render=SITEKEY or api.js?render=SITEKEY
+      const renderMatch = html.match(/recaptcha\/(?:enterprise|api)\.js\?(?:render|onload)=([A-Za-z0-9_-]{39,41})/);
+      if (renderMatch) {
+        _cachedSiteKey = renderMatch[1];
+        _cachedSiteKeyTime = Date.now();
+        console.log(`[TeraBox] Extracted reCAPTCHA sitekey from script src: ${_cachedSiteKey.substring(0, 10)}...`);
+        return _cachedSiteKey;
+      }
+
+      // Pattern 2: grecaptcha.render('...',{sitekey:'SITEKEY'})
+      const renderCallMatch = html.match(/(?:sitekey|site_key)\s*:\s*['"]([A-Za-z0-9_-]{39,41})['"]/);
+      if (renderCallMatch) {
+        _cachedSiteKey = renderCallMatch[1];
+        _cachedSiteKeyTime = Date.now();
+        console.log(`[TeraBox] Extracted reCAPTCHA sitekey from render call: ${_cachedSiteKey.substring(0, 10)}...`);
+        return _cachedSiteKey;
+      }
+
+      // Pattern 3: data-sitekey attribute
+      const dataAttrMatch = html.match(/data-sitekey=['"]([A-Za-z0-9_-]{39,41})['"]/);
+      if (dataAttrMatch) {
+        _cachedSiteKey = dataAttrMatch[1];
+        _cachedSiteKeyTime = Date.now();
+        console.log(`[TeraBox] Extracted reCAPTCHA sitekey from data-sitekey: ${_cachedSiteKey.substring(0, 10)}...`);
+        return _cachedSiteKey;
+      }
+
+      console.warn(`[TeraBox] Could not extract sitekey from ${baseUrl} HTML (length: ${html.length})`);
+    } catch (err) {
+      console.warn(`[TeraBox] Failed to fetch ${baseUrl} for sitekey extraction: ${(err as Error).message}`);
+    }
+  }
+
+  return null;
+}
+
+/**
+ * Get the reCAPTCHA sitekey — tries dynamic extraction first, falls back to hardcoded.
+ */
+export async function getRecaptchaSiteKeyDynamic(proxyUrl?: string): Promise<string> {
+  const dynamic = await extractRecaptchaSiteKey(proxyUrl);
+  if (dynamic) return dynamic;
+  // Fallback to hardcoded / env var
+  console.warn('[TeraBox] Dynamic sitekey extraction failed — using hardcoded fallback (may be stale!)');
+  return getRecaptchaSiteKey();
 }
 
 /**
