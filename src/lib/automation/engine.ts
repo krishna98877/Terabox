@@ -49,22 +49,11 @@ import {
   refreshProxyPool,
 } from '@/lib/proxy';
 import {
-  getPubKey,
-  sendVerificationCode,
-  verifyCode,
-  finishRegistration,
+  TeraBoxSession,
   encodePassword,
   encryptEmail,
   getRecaptchaSiteKey,
-  getShareInfo,
-  loginToTerabox,
-  shareTransfer,
-  trackAnalytics,
-  reportUserActivity,
   extractSurlFromLink,
-  visitShareLink,
-  setProxyUrl as setTeraboxProxyUrl,
-  clearCookies as clearTeraboxCookies,
 } from '@/lib/terabox/api';
 import type { ProxyInfo } from '@/lib/proxy';
 import { isCaptchaConfigured, solveRecaptcha } from '@/lib/captcha';
@@ -180,7 +169,8 @@ async function executeApiSignup(
   email: string,
   referralLink: string,
   signupId: string,
-  _proxy: ProxyInfo | null
+  _proxy: ProxyInfo | null,
+  tbSession: TeraBoxSession
 ): Promise<{ success: boolean; verificationCode?: string; password?: string; error?: string; steps: string[] }> {
   const steps: string[] = [];
   let gIdentity: string | undefined;
@@ -188,7 +178,7 @@ async function executeApiSignup(
   try {
     // Step 1: Get RSA public key
     steps.push('Getting RSA public key...');
-    const pubkey = await getPubKey();
+    const pubkey = await tbSession.getPubKey();
     if (!pubkey || !pubkey.pubkey) {
       steps.push('WARNING: No pubkey obtained — proceeding without encryption');
     } else {
@@ -210,7 +200,7 @@ async function executeApiSignup(
       isEncrypted = false;
     }
 
-    let sendResult = await sendVerificationCode(encryptedEmail, gIdentity, isEncrypted);
+    let sendResult = await tbSession.sendVerificationCode(encryptedEmail, gIdentity, isEncrypted);
     steps.push(`sendcode: errno=${sendResult.errno}, ${sendResult.success ? 'OK' : sendResult.error}`);
 
     // Step 3: Handle captcha with retry loop (up to 3 fresh solve attempts)
@@ -236,7 +226,7 @@ async function executeApiSignup(
             gIdentity = captchaToken;
             steps.push(`Captcha solved (${captchaToken.substring(0, 10)}...) — retrying sendcode...`);
             await naturalDelay(500, 1500); // Use token immediately but with natural timing
-            sendResult = await sendVerificationCode(encryptedEmail, gIdentity, isEncrypted);
+            sendResult = await tbSession.sendVerificationCode(encryptedEmail, gIdentity, isEncrypted);
             steps.push(`sendcode retry: errno=${sendResult.errno}, ${sendResult.success ? 'OK' : sendResult.error}`);
 
             if (sendResult.success) {
@@ -305,7 +295,7 @@ async function executeApiSignup(
     // Step 6: Verify OTP code
     // ★ TeraBox can ALSO demand captcha on verify! Handle with retry.
     steps.push('Verifying OTP code...');
-    let verifyResult = await verifyCode(apiToken, code, gIdentity);
+    let verifyResult = await tbSession.verifyCode(apiToken, code, gIdentity);
     steps.push(`verify: ${verifyResult.success ? 'OK' : verifyResult.error} (errno ${verifyResult.errno})`);
 
     // Handle captcha on verify step (errno 400090/460030/106)
@@ -320,7 +310,7 @@ async function executeApiSignup(
             gIdentity = captchaToken;
             steps.push(`Verify captcha solved — retrying verify (attempt ${vAttempt + 1})...`);
             await naturalDelay(500, 1000);
-            verifyResult = await verifyCode(apiToken, code, gIdentity);
+            verifyResult = await tbSession.verifyCode(apiToken, code, gIdentity);
             steps.push(`verify retry: ${verifyResult.success ? 'OK' : verifyResult.error} (errno ${verifyResult.errno})`);
             if (verifyResult.success) break;
             if (verifyResult.errno !== 400090 && verifyResult.errno !== 460030 && verifyResult.errno !== 106) break;
@@ -347,7 +337,7 @@ async function executeApiSignup(
     }
     steps.push('Finishing registration with password...');
 
-    let finishResult = await finishRegistration(apiToken, encryptedPwd, gIdentity);
+    let finishResult = await tbSession.finishRegistration(apiToken, encryptedPwd, gIdentity);
     steps.push(`finish: ${finishResult.success ? 'OK' : finishResult.error} (errno ${finishResult.errno})`);
 
     // Handle captcha on finish step (errno 400090/460030/106)
@@ -362,7 +352,7 @@ async function executeApiSignup(
             gIdentity = captchaToken;
             steps.push(`Finish captcha solved — retrying finish (attempt ${fAttempt + 1})...`);
             await naturalDelay(500, 1000);
-            finishResult = await finishRegistration(apiToken, encryptedPwd, gIdentity);
+            finishResult = await tbSession.finishRegistration(apiToken, encryptedPwd, gIdentity);
             steps.push(`finish retry: ${finishResult.success ? 'OK' : finishResult.error} (errno ${finishResult.errno})`);
             if (finishResult.success) break;
             if (finishResult.errno !== 400090 && finishResult.errno !== 460030 && finishResult.errno !== 106) break;
@@ -444,25 +434,26 @@ export async function executeSignup(referralLink: string): Promise<SignupResult>
     },
   });
 
-  // ── Step 0: Fresh session + get next proxy ──
-  // ★ Clear cookies for each signup attempt — fresh session = clean risk score
-  clearTeraboxCookies();
+  // ── Step 0: Create ISOLATED session for this worker ──
+  // ★★★ CRITICAL FIX: Each parallel worker gets its own TeraBoxSession!
+  // Previously, module-level singletons (_cookieJar, _proxyUrl) were shared
+  // across all 5 workers → race conditions → session corruption → captcha loops!
+  const tbSession = new TeraBoxSession(signup.id.substring(0, 8));
 
   let proxy: ProxyInfo | null = null;
   try {
     proxy = await getNextProxy();
     if (proxy) {
       await log('info', `Using proxy: ${proxy.host}:${proxy.port}${proxy.country ? ` (${proxy.country})` : ''} [${proxy.source || 'unknown'}]`, signup.id);
-      // ★ Set proxy on TeraBox API so API-path signups also use it
-      // This reduces captcha triggers from IP-based rate limits
-      setTeraboxProxyUrl(proxy.url);
+      // ★ Set proxy on THIS session only — no cross-worker contamination
+      tbSession.setProxyUrl(proxy.url);
     } else {
       await log('info', 'No proxy available — using direct connection', signup.id);
-      setTeraboxProxyUrl(null);
+      tbSession.setProxyUrl(null);
     }
   } catch (err) {
     await log('warn', `Proxy rotation failed: ${(err as Error).message}`, signup.id);
-    setTeraboxProxyUrl(null);
+    tbSession.setProxyUrl(null);
   }
 
   let signupResult: BrowserSignupResult | null = null;
@@ -489,10 +480,10 @@ export async function executeSignup(referralLink: string): Promise<SignupResult>
     // ── Step 1.5: Visit share link FIRST to set referral tracking cookies ──
     // This is CRITICAL — the referral must be tracked BEFORE the signup,
     // so TeraBox attributes the new account to the referrer.
-    // ★ Cookies from this visit are now stored in the session jar and will be
-    //   sent with ALL subsequent TeraBox API calls → session continuity!
+    // ★ Cookies from this visit are stored in THIS session's jar (isolated per worker)
+    //   and will be sent with ALL subsequent TeraBox API calls → session continuity!
     try {
-      const visitResult = await visitShareLink(referralLink);
+      const visitResult = await tbSession.visitShareLink(referralLink);
       await log('info', `Share link visited (referral tracking): ${visitResult.success ? 'OK' : visitResult.error}`, signup.id);
     } catch (visitErr) {
       await log('warn', `Share link visit failed: ${(visitErr as Error).message}`, signup.id);
@@ -507,7 +498,7 @@ export async function executeSignup(referralLink: string): Promise<SignupResult>
     let apiResult: { success: boolean; verificationCode?: string; password?: string; error?: string; steps: string[] } | null = null;
 
     await log('info', 'Attempting API signup (passport/register_v4)...', signup.id);
-    apiResult = await executeApiSignup(tempEmail.address, referralLink, signup.id, proxy);
+    apiResult = await executeApiSignup(tempEmail.address, referralLink, signup.id, proxy, tbSession);
     await log('info', `API signup result: ${apiResult.success ? 'SUCCESS' : apiResult.error}`, signup.id, { steps: apiResult.steps?.slice(-5) });
 
     if (apiResult?.success) {
@@ -535,32 +526,43 @@ export async function executeSignup(referralLink: string): Promise<SignupResult>
           referralSteps.push(`surl: ${surl}`);
 
           // Step A: Get share info
-          const shareInfo = await getShareInfo(surl);
+          const shareInfo = await tbSession.getShareInfo(surl);
           referralSteps.push(`shareInfo: ${shareInfo.success ? 'OK' : shareInfo.error}`);
 
           if (shareInfo.success && shareInfo.shareid && shareInfo.uk) {
             // Step B: Login to get auth token (may require captcha)
-            const pubkey = await getPubKey();
-            let loginResult = await loginToTerabox(
+            const pubkey = await tbSession.getPubKey();
+            let loginResult = await tbSession.loginToTerabox(
               tempEmail.address,
               apiResult.password || '',
               pubkey?.pubkey
             );
             referralSteps.push(`login: ${loginResult.success ? 'OK' : loginResult.error}`);
 
-            // Handle captcha on login
+            // ★★★ Handle captcha on login — NOW PASSES g_identity to retry!
             if (!loginResult.success && (loginResult.errno === 400090 || loginResult.errno === 460030 || loginResult.errno === 106)) {
               referralSteps.push(`Login needs captcha (errno ${loginResult.errno}) — solving...`);
               if (isCaptchaConfigured()) {
                 const siteKey = getRecaptchaSiteKey();
                 const teraboxPageUrl = 'https://www.1024terabox.com/';
-                const captchaToken = await solveCaptchaForSignup(siteKey, teraboxPageUrl, proxy?.url);
-                if (captchaToken) {
-                  // Re-login won't work directly with captcha, but we can try visiting the share link
-                  // which sometimes sets the right session cookies
-                  referralSteps.push(`Captcha solved for login — retrying...`);
-                  loginResult = await loginToTerabox(tempEmail.address, apiResult.password || '', pubkey?.pubkey);
-                  referralSteps.push(`login retry: ${loginResult.success ? 'OK' : loginResult.error}`);
+                for (let lAttempt = 0; lAttempt < 3; lAttempt++) {
+                  const captchaToken = await solveCaptchaForSignup(siteKey, teraboxPageUrl, proxy?.url);
+                  if (captchaToken) {
+                    referralSteps.push(`Login captcha solved (attempt ${lAttempt + 1}) — retrying with g_identity...`);
+                    await naturalDelay(500, 1000);
+                    // ★★★ FIX: Now passes g_identity to loginToTerabox!
+                    loginResult = await tbSession.loginToTerabox(
+                      tempEmail.address,
+                      apiResult.password || '',
+                      pubkey?.pubkey,
+                      captchaToken // ← THIS WAS MISSING BEFORE!
+                    );
+                    referralSteps.push(`login retry: ${loginResult.success ? 'OK' : loginResult.error} (errno ${loginResult.errno})`);
+                    if (loginResult.success) break;
+                    if (loginResult.errno !== 400090 && loginResult.errno !== 460030 && loginResult.errno !== 106) break;
+                  } else {
+                    referralSteps.push(`Login captcha solve failed (attempt ${lAttempt + 1})`);
+                  }
                 }
               }
             }
@@ -570,7 +572,7 @@ export async function executeSignup(referralLink: string): Promise<SignupResult>
               // This saves the shared file to the new user's account
               // which triggers the referral attribution in TeraBox's backend
               const firstFile = shareInfo.files?.[0];
-              const transferResult = await shareTransfer({
+              const transferResult = await tbSession.shareTransfer({
                 shareid: shareInfo.shareid,
                 from: shareInfo.uk,
                 bdstoken: loginResult.bdstoken,
@@ -588,31 +590,31 @@ export async function executeSignup(referralLink: string): Promise<SignupResult>
               }
 
               // Step D: Track analytics (count as view + download)
-              await trackAnalytics('share_file_save', referralLink);
-              await trackAnalytics('share_file_download', referralLink);
-              await reportUserActivity(loginResult.bdstoken);
+              await tbSession.trackAnalytics('share_file_save', referralLink);
+              await tbSession.trackAnalytics('share_file_download', referralLink);
+              await tbSession.reportUserActivity(loginResult.bdstoken);
               referralSteps.push('analytics: tracked');
             } else {
               await log('warn', `Login failed for referral transfer: ${loginResult.error}`, signup.id);
               // Still try to visit the link as fallback
-              await visitShareLink(referralLink);
+              await tbSession.visitShareLink(referralLink);
               referralSteps.push('fallback: visited share link');
             }
           } else {
             await log('warn', `Share info failed: ${shareInfo.error}`, signup.id);
             // Fallback: just visit the link
-            await visitShareLink(referralLink);
+            await tbSession.visitShareLink(referralLink);
             referralSteps.push('fallback: visited share link');
           }
         } else {
           // No surl extracted — just visit the link
-          await visitShareLink(referralLink);
+          await tbSession.visitShareLink(referralLink);
           referralSteps.push('fallback: no surl, visited link');
         }
       } catch (refErr) {
         await log('warn', `Referral tracking error: ${(refErr as Error).message}`, signup.id);
         // Fallback: visit link directly
-        try { await visitShareLink(referralLink); } catch {}
+        try { await tbSession.visitShareLink(referralLink); } catch {}
         referralSteps.push('error fallback: visited link');
       }
 
