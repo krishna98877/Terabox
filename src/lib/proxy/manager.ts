@@ -303,8 +303,9 @@ function parseProxy(line: string, source = 'free-list'): ProxyInfo | null {
 }
 
 // ─── Validate a single proxy ───
-// ★ Validates against TeraBox, not just httpbin.org!
+// ★★★ TIERED VALIDATION: httpbin first (fast), then TeraBox (definitive) ★★★
 // A proxy that works for httpbin might still get blocked by TeraBox.
+// But we don't want to waste TeraBox requests on obviously dead proxies.
 
 async function validateProxy(proxy: ProxyInfo, timeoutMs = 8000): Promise<boolean> {
   // Proxifly proxies are pre-validated — trust them if fresh
@@ -312,11 +313,10 @@ async function validateProxy(proxy: ProxyInfo, timeoutMs = 8000): Promise<boolea
     return true;
   }
 
-  // ★ Validate using proxiedFetch (which uses undici ProxyAgent)
-  // This fixes the broken fetch() + HttpsProxyAgent dispatcher approach
+  // ★ Tier 1: Quick connectivity check via httpbin (fast, 3s timeout)
   try {
     const res = await proxiedFetch('https://httpbin.org/ip', {
-      signal: AbortSignal.timeout(timeoutMs),
+      signal: AbortSignal.timeout(Math.min(timeoutMs, 3000)),
       cache: 'no-store',
       proxyUrl: proxy.url,
     });
@@ -324,12 +324,55 @@ async function validateProxy(proxy: ProxyInfo, timeoutMs = 8000): Promise<boolea
     if (!res.ok) return false;
     const data = await res.json();
     if (!data?.origin) return false;
-
-    proxy.lastVerified = Date.now();
-    return true;
   } catch {
-    return false;
+    return false; // Dead proxy — don't bother with TeraBox check
   }
+
+  // ★ Tier 2: TeraBox-specific validation (definitive)
+  // Check if TeraBox accepts requests from this proxy IP.
+  // If TeraBox returns captcha errno (400090/460030/106), the proxy is flagged → FAIL.
+  // If TeraBox returns normal response (even error), the proxy is NOT flagged → PASS.
+  try {
+    const teraboxRes = await proxiedFetch('https://www.1024terabox.com/api/shorturlinfo?shorturl=1_test&root=1&app_id=250528&web=1', {
+      signal: AbortSignal.timeout(timeoutMs),
+      cache: 'no-store',
+      proxyUrl: proxy.url,
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
+        'Accept': 'application/json, text/plain, */*',
+        'sec-ch-ua': '"Not/A)Brand";v="8", "Chromium";v="126", "Google Chrome";v="126"',
+        'sec-ch-ua-mobile': '?0',
+        'sec-ch-ua-platform': '"Windows"',
+        'sec-fetch-dest': 'empty',
+        'sec-fetch-mode': 'cors',
+        'sec-fetch-site': 'same-origin',
+      },
+    });
+
+    if (teraboxRes.ok) {
+      const tbData = await teraboxRes.json();
+      const errno = tbData.errno ?? tbData.error_code ?? tbData.code;
+
+      // If TeraBox returned captcha-required on a simple API call,
+      // this proxy IP is HIGH RISK — avoid it!
+      if (errno === 400090 || errno === 460030 || errno === 106) {
+        console.warn(`[Proxy] ${proxy.host}:${proxy.port} flagged by TeraBox (errno ${errno}) — skipping`);
+        return false;
+      }
+
+      // Any other response = proxy is NOT flagged by TeraBox → good!
+      proxy.anonymity = proxy.anonymity || 'terabox-verified';
+    }
+    // Even if TeraBox returned non-200 (rate limit, etc.), the proxy itself works
+    // and isn't captcha-flagged. We'll count it as validated.
+  } catch (tbErr) {
+    // TeraBox check failed (timeout, network error) — still keep proxy
+    // since it passed httpbin. It might work for other requests.
+    console.warn(`[Proxy] TeraBox validation skipped for ${proxy.host}:${proxy.port}: ${(tbErr as Error: Error).message?.substring(0, 50)}`);
+  }
+
+  proxy.lastVerified = Date.now();
+  return true;
 }
 
 /**
