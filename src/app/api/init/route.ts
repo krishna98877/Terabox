@@ -18,7 +18,7 @@ export async function GET() {
     if (!config) {
       config = await db.referralConfig.create({
         data: {
-          masterLink: '',
+          masterLink: 'https://1024terabox.com/s/1_9hqBxA_U6WRc9FUhHl1zQ',
           isActive: true,
           autoSignup: false,
           signupInterval: 30,

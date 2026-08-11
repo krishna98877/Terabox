@@ -10,12 +10,19 @@ export async function GET() {
     if (!config) {
       config = await db.referralConfig.create({
         data: {
-          masterLink: '',
+          masterLink: 'https://1024terabox.com/s/1_9hqBxA_U6WRc9FUhHl1zQ',
           isActive: true,
           autoSignup: false,
           signupInterval: 30,
           maxSignupsPerDay: 50,
         },
+      });
+    }
+    // Auto-fill default masterLink if empty
+    if (!config.masterLink) {
+      config = await db.referralConfig.update({
+        where: { id: config.id },
+        data: { masterLink: 'https://1024terabox.com/s/1_9hqBxA_U6WRc9FUhHl1zQ' },
       });
     }
     return NextResponse.json(config);

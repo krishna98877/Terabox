@@ -190,7 +190,7 @@ export default function DashboardPage() {
   const [detailLog, setDetailLog] = useState<ActivityLog | null>(null);
 
   // Config form
-  const [masterLink, setMasterLink] = useState("");
+  const [masterLink, setMasterLink] = useState("https://1024terabox.com/s/1_9hqBxA_U6WRc9FUhHl1zQ");
   const [autoSignup, setAutoSignup] = useState(false);
   const [signupInterval, setSignupInterval] = useState(30);
   const [maxSignups, setMaxSignups] = useState(50);
@@ -202,7 +202,7 @@ export default function DashboardPage() {
       const res = await fetch("/api/config");
       const data = await res.json();
       setConfig(data);
-      setMasterLink(data.masterLink || "");
+      setMasterLink(data.masterLink || "https://1024terabox.com/s/1_9hqBxA_U6WRc9FUhHl1zQ");
       setAutoSignup(data.autoSignup || false);
       setSignupInterval(data.signupInterval || 30);
       setMaxSignups(data.maxSignupsPerDay || 50);
@@ -958,7 +958,7 @@ export default function DashboardPage() {
                             </div>
                             <div className="flex items-center gap-2 mt-0.5">
                               <span className="text-[10px] text-zinc-600">{timeAgo(log.createdAt)}</span>
-                              {(log.type === "error" || log.type === "warn") && (
+                              {(log.type === "error" || log.type === "warn" || log.metadata) && (
                                 <button
                                   onClick={() => setDetailLog(log)}
                                   className="inline-flex items-center gap-1 text-[10px] text-zinc-500 hover:text-zinc-300 transition-colors"

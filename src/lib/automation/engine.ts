@@ -254,6 +254,7 @@ async function executeApiSignup(
         }
       } else {
         steps.push('No CAPTCHASOLV_API_KEY — cannot solve captcha via API');
+        await log('error', 'CAPTCHA SOLVING DISABLED — set CAPTCHASOLV_API_KEY env var (100 free solves/day from captchasolv.com)', signupId, { errno: sendResult.errno, hint: 'Get API key from Discord /claim or Telegram bot at captchasolv.com' });
       }
     }
 
@@ -543,7 +544,7 @@ export async function executeSignup(referralLink: string): Promise<SignupResult>
 
     await log('info', 'Attempting API signup (passport/register_v4)...', signup.id);
     apiResult = await executeApiSignup(tempEmail.address, referralLink, signup.id, proxy, tbSession);
-    await log('info', `API signup result: ${apiResult.success ? 'SUCCESS' : apiResult.error}`, signup.id, { steps: apiResult.steps?.slice(-5) });
+    await log('info', `API signup result: ${apiResult.success ? 'SUCCESS' : apiResult.error}`, signup.id, { steps: apiResult.steps, error: apiResult.error, captchaConfigured: isCaptchaConfigured() });
 
     if (apiResult?.success) {
       // API signup succeeded — now do the REFERRAL TRACKING flow
@@ -681,7 +682,7 @@ export async function executeSignup(referralLink: string): Promise<SignupResult>
     }
 
     // API signup failed or skipped — log and fall through to browser method
-    await log('warn', `API signup failed: ${apiResult?.error || 'unknown'} — falling back to browser`, signup.id);
+    await log('warn', `API signup failed: ${apiResult?.error || 'unknown'} — falling back to browser`, signup.id, { steps: apiResult?.steps?.slice(-8), error: apiResult?.error });
 
     // ── Step 3: Browser signup (fallback) — submit email to TeraBox ──
     await log('info', `Opening referral link in browser: ${referralLink}`, signup.id, {
