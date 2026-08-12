@@ -86,14 +86,14 @@ export const TASK_TYPES = {
 // ─── Error Codes (per docs: errorId 0=success, 1=invalid, 2=bad key, 3=bad type, 10=limit, 12=unsolvable, 15=proxy, 16=not found) ───
 
 const RETRYABLE_ERRORS = new Set([
-  'ERROR_CAPTCHA_UNSOLVABLE', // errorId 12 — only this one should be retried per docs
+  'ERROR_CAPTCHA_UNSOLVABLE', // errorId 12 — retry with different strategy
+  'ERROR_LIMIT_EXCEEDED',     // errorId 10 — concurrent task limit, wait and retry
 ]);
 
 const FATAL_ERRORS: Record<string, string> = {
   'ERROR_INVALID_REQUEST': 'Invalid request format (errorId 1)',
   'ERROR_KEY_DOES_NOT_EXIST': 'Invalid API key (errorId 2)',
   'ERROR_UNSUPPORTED_CAPTCHA_TYPE': 'Unknown task type (errorId 3)',
-  'ERROR_LIMIT_EXCEEDED': 'Rate/balance limit exceeded (errorId 10) — use waitForSlot: true',
   'ERROR_PROXY_BLOCKED': 'Proxy/IP hard blocked by target (errorId 15)',
   'ERROR_NO_SUCH_CAPCHA_ID': 'Task ID not found or expired (errorId 16)',
 };
@@ -451,9 +451,10 @@ async function solveWithRetry(
       return result; // Fatal error, don't retry
     }
 
-    console.warn(`[CaptchaSolv] ${label} unsolvable (attempt ${attempt + 1}/${MAX_RETRIES}), retrying...`);
+    console.warn(`[CaptchaSolv] ${label} retryable error (attempt ${attempt + 1}/${MAX_RETRIES}): ${result.errorCode}, retrying...`);
     if (attempt < MAX_RETRIES - 1) {
-      await new Promise(r => setTimeout(r, 2000));
+      const delay = result.errorCode === 'ERROR_LIMIT_EXCEEDED' ? 10000 : 3000;
+      await new Promise(r => setTimeout(r, delay));
     }
   }
   return { success: false, error: `Max retries exceeded for ${label}`, provider: 'captchasolv' };
@@ -476,9 +477,12 @@ async function solveWithRetryAsync(
       return result; // Fatal error, don't retry
     }
 
-    console.warn(`[CaptchaSolv] ${label} unsolvable (attempt ${attempt + 1}/${MAX_RETRIES}), retrying...`);
+    // Longer backoff for rate limits (concurrent task limit)
+    const isLimitError = result.errorCode === 'ERROR_LIMIT_EXCEEDED';
+    const delay = isLimitError ? 10000 : 3000; // 10s for limit, 3s for unsolvable
+    console.warn(`[CaptchaSolv] ${label} ${isLimitError ? 'rate limited' : 'unsolvable'} (attempt ${attempt + 1}/${MAX_RETRIES}), retrying in ${delay/1000}s...`);
     if (attempt < MAX_RETRIES - 1) {
-      await new Promise(r => setTimeout(r, 2000));
+      await new Promise(r => setTimeout(r, delay));
     }
   }
   return { success: false, error: `Max retries exceeded for ${label}`, provider: 'captchasolv' };

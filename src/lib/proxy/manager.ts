@@ -340,11 +340,57 @@ async function validateBatch(proxies: ProxyInfo[], concurrency = 10): Promise<Pr
   return valid;
 }
 
+// ─── IPRoyal Residential Proxies ───
+
+/**
+ * Get IPRoyal residential proxy configuration from env vars.
+ * IPRoyal is the BEST proxy source for TeraBox — residential IPs look like real users.
+ * Format: http://username:password@gate.iproyal.com:12321
+ *
+ * Env vars:
+ *   IPROYAL_USERNAME — IPRoyal account username
+ *   IPROYAL_PASSWORD — IPRoyal account password
+ *   IPROYAL_HOST — Gateway host (default: gate.iproyal.com)
+ *   IPROYAL_PORT — Gateway port (default: 12321)
+ *   IPROYAL_COUNTRY — Country code for geo-targeting (optional, e.g. "us", "gb")
+ */
+function getIPRoyalProxies(): ProxyInfo[] {
+  const username = process.env.IPROYAL_USERNAME;
+  const password = process.env.IPROYAL_PASSWORD;
+  if (!username || !password) return [];
+
+  const host = process.env.IPROYAL_HOST || 'gate.iproyal.com';
+  const port = parseInt(process.env.IPROYAL_PORT || '12321', 10);
+  const country = process.env.IPROYAL_COUNTRY || '';
+
+  // Build proxy URL with optional country targeting
+  // IPRoyal format: http://username-country-us:password@gate.iproyal.com:12321
+  let proxyUser = username;
+  if (country) {
+    proxyUser = `${username}-country-${country}`;
+  }
+
+  const proxyUrl = `http://${proxyUser}:${password}@${host}:${port}`;
+
+  return [{
+    url: proxyUrl,
+    host,
+    port,
+    protocol: 'http',
+    country: country || 'unknown',
+    source: 'iproyal-residential',
+    anonymity: 'elite', // Residential = highest anonymity
+    lastVerified: Date.now(),
+    failCount: 0,
+    successCount: 0,
+  }];
+}
+
 // ─── Public API ───
 
 /**
  * Initialize and refresh the proxy pool.
- * ProxyScrape-only: fetches from all tiers, validates, and builds pool.
+ * ★★★ IPRoyal residential proxies FIRST (best for TeraBox), then ProxyScrape fallback.
  */
 export async function refreshProxyPool(): Promise<{
   fetched: number;
@@ -356,10 +402,30 @@ export async function refreshProxyPool(): Promise<{
   }
 
   isRefreshing = true;
-  console.log('[Proxy] Refreshing proxy pool (ProxyScrape only)...');
+  console.log('[Proxy] Refreshing proxy pool...');
 
   try {
-    // Fetch from all ProxyScrape tiers concurrently
+    // ★★★ Priority 1: IPRoyal residential proxies (BEST for TeraBox!)
+    // Residential IPs look like real users → TeraBox doesn't flag them
+    // Combined with CaptchaSolv proxied tasks → token bound to residential IP → accepted!
+    const iproyalProxies = getIPRoyalProxies();
+    if (iproyalProxies.length > 0) {
+      console.log(`[Proxy] IPRoyal: ${iproyalProxies.length} residential proxy(ies) configured`);
+      // Add IPRoyal proxies to pool (they're pre-validated — residential IPs are reliable)
+      const existingUrls = new Set(proxyPool.map(p => p.url));
+      const newIPRoyal = iproyalProxies.filter(p => !existingUrls.has(p.url));
+      if (newIPRoyal.length > 0) {
+        proxyPool = [
+          ...proxyPool.filter(p => p.failCount < MAX_FAILS),
+          ...newIPRoyal,
+        ];
+        console.log(`[Proxy] Added ${newIPRoyal.length} IPRoyal residential proxies to pool`);
+      }
+    } else {
+      console.log('[Proxy] IPRoyal not configured — using ProxyScrape free proxies');
+    }
+
+    // ★ Priority 2: ProxyScrape free proxies (fallback — datacenter IPs, less reliable)
     const allRaw = await fetchAllProxyScrapeTiers();
     console.log(`[Proxy] Fetched ${allRaw.length} raw proxies from ProxyScrape`);
 
@@ -418,6 +484,17 @@ export async function getNextProxy(): Promise<ProxyInfo | null> {
   if (proxyPool.length === 0) {
     console.warn('[Proxy] No proxies available — using direct connection');
     return null;
+  }
+
+  // ★ Priority 0: IPRoyal residential proxies (BEST — real IPs, never flagged)
+  const iproyalProxies = proxyPool.filter(
+    p => p.source === 'iproyal-residential' && p.failCount < MAX_FAILS
+  );
+  if (iproyalProxies.length > 0) {
+    // Rotate through IPRoyal proxies (each request gets a different residential IP)
+    const proxy = iproyalProxies[currentIndex % iproyalProxies.length];
+    currentIndex++;
+    return proxy;
   }
 
   // ★ Priority 1: Elite proxies (highest anonymity — least likely flagged)

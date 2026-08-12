@@ -323,7 +323,8 @@ async function handleRecaptcha(page: AnyPage, steps: string[], proxyUrl?: string
         // ★★★ PASS PROXY TO CaptchaSolv — this is the KEY fix! ★★★
         // With proxy: CaptchaSolv solves from proxy IP → token bound to proxy IP → TeraBox accepts
         // Without proxy: CaptchaSolv solves from their IP → token bound to CaptchaSolv IP → TeraBox REJECTS
-        const token = await solveRecaptcha(siteKey, page.url(), proxyUrl);
+        const result = await solveRecaptcha(siteKey, page.url(), proxyUrl);
+        const token = result?.token || null;
 
         if (token) {
           // Inject the token into the page

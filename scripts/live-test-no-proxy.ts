@@ -129,10 +129,26 @@ async function main() {
 
   // 10. Wait for OTP email
   console.log('\n--- Waiting for OTP email (polling CatchMail.io)... ---');
-  const { pollForMessages } = await import('../src/lib/automation/engine');
-  // We can't easily import pollForMessages, so let's just check manually
-  console.log('Email should arrive at:', email.address);
-  console.log('Check manually or wait for the engine to pick it up...');
+  const { listMessages, getMessage, extractVerificationCode } = await import('../src/lib/catchmail');
+  for (let i = 0; i < 12; i++) {
+    await new Promise(r => setTimeout(r, 5000)); // wait 5s between polls
+    const inbox = await listMessages(email.address);
+    if (inbox && inbox.messages && inbox.messages.length > 0) {
+      console.log(`Got ${inbox.messages.length} message(s)!`);
+      const latest = inbox.messages[0];
+      console.log(`From: ${latest.from}, Subject: ${latest.subject}`);
+      // Get full message to extract OTP
+      const detail = await getMessage(email.address, latest.id);
+      const otp = extractVerificationCode(detail?.body?.text || detail?.subject || '');
+      if (otp) {
+        console.log(`\n★★★ OTP FOUND: ${otp} ★★★`);
+        break;
+      }
+      console.log(`No OTP found in message, preview: ${detail?.body?.text?.substring(0, 300)}`);
+      break;
+    }
+    console.log(`Poll ${i+1}/12: no messages yet...`);
+  }
   
   console.log('\n=== TEST RESULT: sendcode SUCCESS — OTP sent to email ===');
   console.log('The captcha solving + sendcode flow is WORKING!');

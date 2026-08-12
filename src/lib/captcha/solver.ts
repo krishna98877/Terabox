@@ -197,6 +197,15 @@ export interface RecaptchaSolveResult {
  * Solve reCAPTCHA for TeraBox signup — returns token + detailed error info.
  * The errors array captures WHY each attempt failed, so the detail button
  * can show the full technical error for debugging/sharing.
+ *
+ * ★★★ STRATEGY (updated based on live testing):
+ * 1. WITH PROXY: Try v2 Standard FIRST (proven to work! solves in ~5s)
+ *    Then try v2 Enterprise if Standard fails (Enterprise often returns UNSOLVABLE)
+ * 2. WITHOUT PROXY: Try v2 Standard then Enterprise sequentially
+ *    (both likely fail proxyless, but at least we get clear error info)
+ * 3. SEQUENTIAL (not parallel) to avoid CaptchaSolv's concurrent task limit
+ *    (free tier: 1-2 concurrent tasks; parallel causes ERROR_LIMIT_EXCEEDED)
+ * 4. v3 variants as last resort (lower success rate for TeraBox)
  */
 export async function solveRecaptcha(siteKey: string, pageUrl: string, proxyUrl?: string): Promise<RecaptchaSolveResult> {
   const errors: RecaptchaSolveResult['errors'] = [];
@@ -208,95 +217,62 @@ export async function solveRecaptcha(siteKey: string, pageUrl: string, proxyUrl?
   }
 
   const proxyLabel = proxyUrl ? `via proxy (${proxyUrl.substring(0, 30)}...)` : 'proxyless';
-  console.log(`[Captcha] Solving reCAPTCHA for ${pageUrl.substring(0, 60)}... (provider: captchasolv, parallel strategy, ${proxyLabel})`);
+  console.log(`[Captcha] Solving reCAPTCHA for ${pageUrl.substring(0, 60)}... (provider: captchasolv, sequential strategy, ${proxyLabel})`);
 
   try {
-    // ★ Phase 1: Try v2 Enterprise + v2 Standard IN PARALLEL
-    let v2Token: string | null = null;
+    // ★ Phase 1: Try v2 Standard FIRST (proven to work with proxy!)
+    console.log(`[Captcha] Phase 1: v2 Standard${proxyUrl ? ' (proxy-bound)' : ' (proxyless)'}...`);
+    const v2StdResult = await solveRecaptchaV2(siteKey, pageUrl, false, proxyUrl);
 
-    const v2EntPromise = solveRecaptchaV2Enterprise(siteKey, pageUrl, false, proxyUrl);
-    const v2StdPromise = solveRecaptchaV2(siteKey, pageUrl, false, proxyUrl);
-
-    const v2RaceResult = await Promise.race([
-      v2EntPromise.then(r => ({ source: 'ent' as const, result: r })),
-      v2StdPromise.then(r => ({ source: 'std' as const, result: r })),
-    ]);
-
-    if (v2RaceResult.result.success) {
-      const token = v2RaceResult.result.solution?.token || v2RaceResult.result.solution?.gRecaptchaResponse;
+    if (v2StdResult.success) {
+      const token = v2StdResult.solution?.token || v2StdResult.solution?.gRecaptchaResponse;
       if (token) {
-        console.log(`[Captcha] ${v2RaceResult.source === 'ent' ? 'Enterprise' : 'Standard'} v2 solved (race winner)${v2RaceResult.result.solveTime ? ` in ${v2RaceResult.result.solveTime.toFixed(1)}s` : ''}${v2RaceResult.result.cost ? ` (cost: ${v2RaceResult.result.cost})` : ''}`);
-        v2Token = token;
-      }
-    } else {
-      errors.push({ phase: 'v2', type: v2RaceResult.source === 'ent' ? 'Enterprise' : 'Standard', error: v2RaceResult.result.error || 'Unknown error', errorCode: v2RaceResult.result.errorCode });
-    }
-
-    // If race winner failed, check the other one
-    if (!v2Token) {
-      const otherSource = v2RaceResult.source === 'ent' ? 'std' : 'ent';
-      const otherPromise = v2RaceResult.source === 'ent' ? v2StdPromise : v2EntPromise;
-      try {
-        const otherResult = await otherPromise;
-        if (otherResult.success) {
-          const token = otherResult.solution?.token || otherResult.solution?.gRecaptchaResponse;
-          if (token) {
-            console.log(`[Captcha] ${otherSource === 'ent' ? 'Enterprise' : 'Standard'} v2 solved (fallback)${otherResult.solveTime ? ` in ${otherResult.solveTime.toFixed(1)}s` : ''}`);
-            v2Token = token;
-          }
-        } else {
-          errors.push({ phase: 'v2', type: otherSource === 'ent' ? 'Enterprise' : 'Standard', error: otherResult.error || 'Unknown error', errorCode: otherResult.errorCode });
-        }
-      } catch (e) {
-        errors.push({ phase: 'v2', type: otherSource === 'ent' ? 'Enterprise' : 'Standard', error: `Exception: ${(e as Error).message}` });
+        console.log(`[Captcha] v2 Standard solved!${v2StdResult.solveTime ? ` in ${v2StdResult.solveTime.toFixed(1)}s` : ''}${v2StdResult.cost ? ` (cost: ${v2StdResult.cost})` : ''}`);
+        return { token, errors };
       }
     }
+    errors.push({ phase: 'v2', type: 'Standard', error: v2StdResult.error || 'Unknown error', errorCode: v2StdResult.errorCode });
+    console.warn(`[Captcha] v2 Standard failed: ${v2StdResult.error} (${v2StdResult.errorCode || 'no code'})`);
 
-    if (v2Token) return { token: v2Token, errors };
+    // ★ Phase 2: Try v2 Enterprise (often UNSOLVABLE with free proxies, but worth trying)
+    console.log(`[Captcha] Phase 2: v2 Enterprise${proxyUrl ? ' (proxy-bound)' : ' (proxyless)'}...`);
+    const v2EntResult = await solveRecaptchaV2Enterprise(siteKey, pageUrl, false, proxyUrl);
 
-    console.warn(`[Captcha] v2 parallel failed`, errors.filter(e => e.phase === 'v2').map(e => `${e.type}: ${e.error}`).join('; '));
-
-    // ★ Phase 2: Try v3 variants in parallel
-    let v3Token: string | null = null;
-
-    const v3EntPromise = solveRecaptchaV3Enterprise(siteKey, pageUrl, 0.3, 'register', proxyUrl);
-    const v3StdPromise = solveRecaptchaV3(siteKey, pageUrl, 0.3, 'register', proxyUrl);
-
-    const v3RaceResult = await Promise.race([
-      v3EntPromise.then(r => ({ source: 'ent' as const, result: r })),
-      v3StdPromise.then(r => ({ source: 'std' as const, result: r })),
-    ]);
-
-    if (v3RaceResult.result.success) {
-      const token = v3RaceResult.result.solution?.token || v3RaceResult.result.solution?.gRecaptchaResponse;
+    if (v2EntResult.success) {
+      const token = v2EntResult.solution?.token || v2EntResult.solution?.gRecaptchaResponse;
       if (token) {
-        console.log(`[Captcha] ${v3RaceResult.source === 'ent' ? 'Enterprise' : 'Standard'} v3 solved (race winner)${v3RaceResult.result.solveTime ? ` in ${v3RaceResult.result.solveTime.toFixed(1)}s` : ''}`);
-        v3Token = token;
-      }
-    } else {
-      errors.push({ phase: 'v3', type: v3RaceResult.source === 'ent' ? 'Enterprise' : 'Standard', error: v3RaceResult.result.error || 'Unknown error', errorCode: v3RaceResult.result.errorCode });
-    }
-
-    if (!v3Token) {
-      const otherSource = v3RaceResult.source === 'ent' ? 'std' : 'ent';
-      const otherPromise = v3RaceResult.source === 'ent' ? v3StdPromise : v3EntPromise;
-      try {
-        const otherResult = await otherPromise;
-        if (otherResult.success) {
-          const token = otherResult.solution?.token || otherResult.solution?.gRecaptchaResponse;
-          if (token) {
-            console.log(`[Captcha] ${otherSource === 'ent' ? 'Enterprise' : 'Standard'} v3 solved (fallback)${otherResult.solveTime ? ` in ${otherResult.solveTime.toFixed(1)}s` : ''}`);
-            v3Token = token;
-          }
-        } else {
-          errors.push({ phase: 'v3', type: otherSource === 'ent' ? 'Enterprise' : 'Standard', error: otherResult.error || 'Unknown error', errorCode: otherResult.errorCode });
-        }
-      } catch (e) {
-        errors.push({ phase: 'v3', type: otherSource === 'ent' ? 'Enterprise' : 'Standard', error: `Exception: ${(e as Error).message}` });
+        console.log(`[Captcha] v2 Enterprise solved!${v2EntResult.solveTime ? ` in ${v2EntResult.solveTime.toFixed(1)}s` : ''}${v2EntResult.cost ? ` (cost: ${v2EntResult.cost})` : ''}`);
+        return { token, errors };
       }
     }
+    errors.push({ phase: 'v2', type: 'Enterprise', error: v2EntResult.error || 'Unknown error', errorCode: v2EntResult.errorCode });
+    console.warn(`[Captcha] v2 Enterprise failed: ${v2EntResult.error} (${v2EntResult.errorCode || 'no code'})`);
 
-    if (v3Token) return { token: v3Token, errors };
+    // ★ Phase 3: Try v3 Standard (last resort — lower success rate for TeraBox)
+    console.log(`[Captcha] Phase 3: v3 Standard${proxyUrl ? ' (proxy-bound)' : ' (proxyless)'}...`);
+    const v3StdResult = await solveRecaptchaV3(siteKey, pageUrl, 0.3, 'register', proxyUrl);
+
+    if (v3StdResult.success) {
+      const token = v3StdResult.solution?.token || v3StdResult.solution?.gRecaptchaResponse;
+      if (token) {
+        console.log(`[Captcha] v3 Standard solved!${v3StdResult.solveTime ? ` in ${v3StdResult.solveTime.toFixed(1)}s` : ''}`);
+        return { token, errors };
+      }
+    }
+    errors.push({ phase: 'v3', type: 'Standard', error: v3StdResult.error || 'Unknown error', errorCode: v3StdResult.errorCode });
+
+    // ★ Phase 4: Try v3 Enterprise (absolute last resort)
+    console.log(`[Captcha] Phase 4: v3 Enterprise${proxyUrl ? ' (proxy-bound)' : ' (proxyless)'}...`);
+    const v3EntResult = await solveRecaptchaV3Enterprise(siteKey, pageUrl, 0.3, 'register', proxyUrl);
+
+    if (v3EntResult.success) {
+      const token = v3EntResult.solution?.token || v3EntResult.solution?.gRecaptchaResponse;
+      if (token) {
+        console.log(`[Captcha] v3 Enterprise solved!${v3EntResult.solveTime ? ` in ${v3EntResult.solveTime.toFixed(1)}s` : ''}`);
+        return { token, errors };
+      }
+    }
+    errors.push({ phase: 'v3', type: 'Enterprise', error: v3EntResult.error || 'Unknown error', errorCode: v3EntResult.errorCode });
 
     console.error(`[Captcha] All strategies failed.`, errors);
     return { token: null, errors };
