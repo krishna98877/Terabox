@@ -239,9 +239,18 @@ export async function proxiedFetch(url: string | URL, init: ProxiedFetchInit = {
     return fetch(url, fetchInit);
   }
 
-  // With proxy — use https.request() + HttpsProxyAgent
-  // This is the only reliable method for proxied HTTPS through free proxies
-  return proxiedHttpRequest(url, fetchInit, proxyUrl);
+  // With proxy — use fetch() with HttpsProxyAgent
+  // ★★★ Updated for Node.js v22+: fetch() supports the `agent` option.
+  //   HttpsProxyAgent as `agent` is the ONLY working approach in Node.js v24.
+  //   - fetch() + `dispatcher` option (undici ProxyAgent) = BROKEN
+  //   - https.request() + HttpsProxyAgent = BROKEN ("CONNECT response" error)
+  //   - fetch() + `agent` option = WORKS!
+  const agent = getProxyAgent(proxyUrl);
+  return fetch(url, {
+    ...fetchInit,
+    // @ts-ignore — Node.js v22+ supports agent option on fetch()
+    agent,
+  });
 }
 
 // ─── Convenience: POST with form data ───

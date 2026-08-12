@@ -405,6 +405,12 @@ export async function refreshProxyPool(): Promise<{
   console.log('[Proxy] Refreshing proxy pool...');
 
   try {
+    // ★★★ Priority 0: Uploaded proxies (BEST — user-provided, trusted)
+    const uploadedCount = loadUploadedProxies();
+    if (uploadedCount > 0) {
+      console.log(`[Proxy] ${uploadedCount} uploaded proxies loaded (highest priority)`);
+    }
+
     // ★★★ Priority 1: IPRoyal residential proxies (BEST for TeraBox!)
     // Residential IPs look like real users → TeraBox doesn't flag them
     // Combined with CaptchaSolv proxied tasks → token bound to residential IP → accepted!
@@ -484,6 +490,16 @@ export async function getNextProxy(): Promise<ProxyInfo | null> {
   if (proxyPool.length === 0) {
     console.warn('[Proxy] No proxies available — using direct connection');
     return null;
+  }
+
+  // ★ Priority -1: Uploaded proxies (HIGHEST — user-provided, trusted)
+  const uploadedProxies = proxyPool.filter(
+    p => p.source === 'uploaded' && p.failCount < MAX_FAILS
+  );
+  if (uploadedProxies.length > 0) {
+    const proxy = uploadedProxies[currentIndex % uploadedProxies.length];
+    currentIndex++;
+    return proxy;
   }
 
   // ★ Priority 0: IPRoyal residential proxies (BEST — real IPs, never flagged)
@@ -632,6 +648,56 @@ export function setCustomProxies(proxies: string[]): void {
     .filter((p): p is ProxyInfo => p !== null);
   proxyPool = [...parsed, ...proxyPool];
   console.log(`[Proxy] Added ${parsed.length} custom proxies (pool: ${proxyPool.length})`);
+}
+
+/**
+ * ★★★ Load proxies from uploaded file (/home/z/my-project/upload/proxies.txt)
+ * These are user-provided proxies — highest priority, no validation needed.
+ * Format: one proxy URL per line (e.g. http://1.2.3.4:8080)
+ */
+export function loadUploadedProxies(): number {
+  const PROXY_FILE = '/home/z/my-project/upload/proxies.txt';
+  try {
+    const fs = require('fs');
+    if (!fs.existsSync(PROXY_FILE)) return 0;
+
+    const text = fs.readFileSync(PROXY_FILE, 'utf-8');
+    const lines = text.trim().split('\n').filter((l: string) => l.trim());
+
+    const parsed: ProxyInfo[] = [];
+    for (const line of lines) {
+      try {
+        const proxyUrl = line.trim();
+        const url = new URL(proxyUrl);
+        parsed.push({
+          url: proxyUrl,
+          host: url.hostname,
+          port: parseInt(url.port, 10),
+          protocol: url.protocol.replace(':', '') as ProxyInfo['protocol'],
+          source: 'uploaded',
+          anonymity: 'elite', // Assume best — these are user-provided
+          lastVerified: Date.now(),
+          failCount: 0,
+          successCount: 0,
+        });
+      } catch {
+        // Skip malformed lines
+      }
+    }
+
+    if (parsed.length > 0) {
+      // Remove any existing uploaded proxies first (avoid duplicates on refresh)
+      proxyPool = proxyPool.filter(p => p.source !== 'uploaded');
+      // Add uploaded proxies at the beginning (highest priority)
+      proxyPool = [...parsed, ...proxyPool];
+      console.log(`[Proxy] Loaded ${parsed.length} uploaded proxies (pool: ${proxyPool.length})`);
+    }
+
+    return parsed.length;
+  } catch (err) {
+    console.warn(`[Proxy] Failed to load uploaded proxies: ${(err as Error).message}`);
+    return 0;
+  }
 }
 
 /**
