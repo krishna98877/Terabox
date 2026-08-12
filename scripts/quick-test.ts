@@ -63,14 +63,15 @@ async function main() {
     for (let i = 0; i < 2; i++) {
       console.log(`\n    --- attempt ${i+1}/2 ---`);
       const t0 = Date.now();
-      const token = await solveRecaptcha(sk, 'https://www.1024terabox.com/', undefined);
-      console.log(`    Solved in ${((Date.now()-t0)/1000).toFixed(1)}s, len=${token?.length || 0}`);
+      const result = await solveRecaptcha(sk, 'https://www.1024terabox.com/', undefined);
+      console.log(`    Solved in ${((Date.now()-t0)/1000).toFixed(1)}s, len=${result?.token?.length || 0}`);
+      if (result?.errors?.length) console.log(`    Errors: ${JSON.stringify(result.errors)}`);
 
-      if (!token) { console.log('    Solve FAILED'); continue; }
+      if (!result?.token) { console.log('    Solve FAILED'); continue; }
 
       console.log(`    Retrying sendcode with token...`);
       await new Promise(r => setTimeout(r, 800));
-      res = await tb.sendVerificationCode(enc, token, isEnc);
+      res = await tb.sendVerificationCode(enc, result.token, isEnc);
       console.log(`    success=${res.success} errno=${res.errno}`);
       if (res.rawResponse) console.log(`    RAW: ${JSON.stringify(res.rawResponse).substring(0, 500)}`);
       

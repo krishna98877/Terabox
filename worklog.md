@@ -329,3 +329,29 @@ Stage Summary:
 - ROOT CAUSE FOUND: CaptchaSolv API key 8f1d4243-9579-4005-8e3f-ad122e07504a is INVALID (expired/revoked)
 - UI now shows captcha API key status prominently (dashboard banner + config tab)
 - Engine validates API key before attempting to solve captcha
+
+---
+Task ID: 1
+Agent: main
+Task: Fix captcha flow, update API key, enhance error logging, run live test
+
+Work Log:
+- Updated CAPTCHASOLV_API_KEY to 40fd4b6c-efd9-4a07-99df-53b0cb3888db in .env (was already set)
+- Changed solveRecaptcha() return type from string|null to RecaptchaSolveResult {token, errors} so detail button shows WHY captcha fails
+- Enhanced solveCaptchaForSignup() to log full technical errors with all error details, balance info, API key prefix
+- Updated all call sites (sendcode, verify, finish, login) to pass signupId to solveCaptchaForSignup
+- Increased ASYNC_POLL_INTERVAL from 3s to 5s and ASYNC_MAX_POLL from 40 to 30 (150s total) for more reliable solving
+- Added maxWaitTime=120 to createTask and /solve requests for waitForSlot
+- Enhanced extractRecaptchaSiteKey() with Patterns 4-5 to search TeraBox JS bundles for sitekey
+- Fixed all test scripts to use new solveRecaptcha return type
+- Confirmed default referral link https://1024terabox.com/s/1_9hqBxA_U6WRc9FUhHl1zQ with Reset to Default button already in UI
+- Ran live tests: TeraBox API works (errno 400090 = needs captcha), sendcode works without proxy
+- Confirmed sitekey 6LceASUfAAAAAHBcvTdvuPVie_9yzavGubPLOGTH from terabox-login.js JS bundle
+- CaptchaSolv API key verified: balance $0.00015, free tier active, health ok
+- CaptchaSolv solving is inconsistent: sometimes solves in 17s, sometimes times out at 65s (free tier limitation)
+
+Stage Summary:
+- All code fixes deployed: error logging, detail button data, API key, longer timeouts
+- The captcha solving depends on CaptchaSolv service reliability (external factor)
+- TeraBox flow confirmed working: visit share link → get pubkey → sendcode → captcha required → solve attempt
+- RSA encryption fails for TeraBox custom pubkey format but plaintext emails work fine

@@ -55,15 +55,15 @@ async function main() {
       console.log(`    Solving captcha WITH proxy (proxy-bound token)...`);
       
       const t0 = Date.now();
-      const token = await solveRecaptcha(siteKey, 'https://www.1024terabox.com/', proxy?.url);
+      const result = await solveRecaptcha(siteKey, 'https://www.1024terabox.com/', proxy?.url);
       const elapsed = ((Date.now()-t0)/1000).toFixed(1);
       
-      if (!token) { console.log(`    Solve FAILED after ${elapsed}s`); continue; }
-      console.log(`    Solved in ${elapsed}s, len=${token.length}`);
+      if (!result?.token) { console.log(`    Solve FAILED after ${elapsed}s`); if (result?.errors?.length) console.log(`    Errors: ${JSON.stringify(result.errors)}`); continue; }
+      console.log(`    Solved in ${elapsed}s, len=${result.token.length}`);
 
       console.log(`    Retrying sendcode with proxy-bound token...`);
       await new Promise(r => setTimeout(r, 1000));
-      res = await tb.sendVerificationCode(email.address, token, false);
+      res = await tb.sendVerificationCode(email.address, result.token, false);
       console.log(`    success=${res.success} errno=${res.errno}`);
       if (res.rawResponse) console.log(`    RAW: ${JSON.stringify(res.rawResponse).substring(0, 300)}`);
       

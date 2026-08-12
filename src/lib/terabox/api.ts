@@ -787,6 +787,52 @@ export async function extractRecaptchaSiteKey(proxyUrl?: string): Promise<string
         return _cachedSiteKey;
       }
 
+      // Pattern 4: Extract from TeraBox JS bundles (SPA loads sitekey in JS)
+      // The terabox-login.*.js bundle contains sitekey in format: sitekey:"6Lce..."
+      const jsBundleUrls = [...html.matchAll(/src=["'](https?:\/\/[^"']*terabox[^"']*login[^"']*\.js[^"']*)["']/gi)];
+      if (jsBundleUrls.length > 0) {
+        for (const match of jsBundleUrls) {
+          try {
+            const jsRes = await proxiedFetch(match[1], {
+              signal: AbortSignal.timeout(15000),
+              cache: 'no-store',
+              proxyUrl: proxyUrl || undefined,
+            });
+            const jsText = await jsRes.text();
+            // Search for sitekey in JS
+            const jsSitekeyMatch = jsText.match(/sitekey[^a-zA-Z0-9]*["']([A-Za-z0-9_-]{39,41})["']/);
+            if (jsSitekeyMatch) {
+              _cachedSiteKey = jsSitekeyMatch[1];
+              _cachedSiteKeyTime = Date.now();
+              console.log(`[TeraBox] Extracted reCAPTCHA sitekey from JS bundle (${match[1].split('/').pop()}): ${_cachedSiteKey.substring(0, 10)}...`);
+              return _cachedSiteKey;
+            }
+          } catch {}
+        }
+      }
+
+      // Pattern 5: Try fetching known CDN JS bundle URLs
+      // The sitekey is in terabox-login.*.js which we found at:
+      // https://s5.teraboxcdn.com/fe-static/fe-v5-web-index/js/terabox-login.*.js
+      const cdnPatterns = html.matchAll(/href=["'](https?:\/\/[^"']*teraboxcdn[^"']*login[^"']*\.js[^"']*)["']/gi);
+      for (const match of cdnPatterns) {
+        try {
+          const jsRes = await proxiedFetch(match[1], {
+            signal: AbortSignal.timeout(15000),
+            cache: 'no-store',
+            proxyUrl: proxyUrl || undefined,
+          });
+          const jsText = await jsRes.text();
+          const jsSitekeyMatch = jsText.match(/sitekey[^a-zA-Z0-9]*["']([A-Za-z0-9_-]{39,41})["']/);
+          if (jsSitekeyMatch) {
+            _cachedSiteKey = jsSitekeyMatch[1];
+            _cachedSiteKeyTime = Date.now();
+            console.log(`[TeraBox] Extracted reCAPTCHA sitekey from CDN bundle: ${_cachedSiteKey.substring(0, 10)}...`);
+            return _cachedSiteKey;
+          }
+        } catch {}
+      }
+
       console.warn(`[TeraBox] Could not extract sitekey from ${baseUrl} HTML (length: ${html.length})`);
     } catch (err) {
       console.warn(`[TeraBox] Failed to fetch ${baseUrl} for sitekey extraction: ${(err as Error).message}`);

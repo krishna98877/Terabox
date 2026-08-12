@@ -31,8 +31,8 @@
 
 const API_BASE = 'https://v1.captchasolv.com';
 const SYNC_TIMEOUT = 130_000; // 130s (docs: API timeout is 120s, set client >= 130s)
-const ASYNC_POLL_INTERVAL = 3000; // 3 seconds (docs recommend 3-5s)
-const ASYNC_MAX_POLL = 40; // 40 * 3s = 120s max
+const ASYNC_POLL_INTERVAL = 5000; // 5 seconds (increased from 3s — CaptchaSolv needs more time for reCAPTCHA)
+const ASYNC_MAX_POLL = 30; // 30 * 5s = 150s max (increased from 120s — some captchas take 60-90s)
 const MAX_RETRIES = 3; // Retry on ERROR_CAPTCHA_UNSOLVABLE (per docs)
 
 // ─── Types ───
@@ -222,6 +222,7 @@ async function solveSync(
   };
   if (waitForSlot) {
     body.waitForSlot = true;
+    body.maxWaitTime = 120; // Wait up to 120s for a solver slot
   }
 
   try {
@@ -312,6 +313,7 @@ async function createTask(
     const body: Record<string, unknown> = { clientKey: apiKey, task };
     if (waitForSlot) {
       body.waitForSlot = true;
+      body.maxWaitTime = 120; // Wait up to 120s for a solver(免费键的槽位可能很忙)
     }
     const res = await apiPost('/createTask', body, 15000);
 
