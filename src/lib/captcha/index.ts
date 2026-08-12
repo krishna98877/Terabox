@@ -22,4 +22,4 @@ export {
   getSupportedTypes,
   TASK_TYPES,
 } from './solver';
-export type { CaptchaTask, SolveResult } from './solver';
+export type { CaptchaTask, SolveResult, RecaptchaSolveResult } from './solver';

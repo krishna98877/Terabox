@@ -188,10 +188,23 @@ export async function getSupportedTypes() {
  *
  * Per CaptchaSolv docs: token expires in ~2 min — use immediately!
  */
-export async function solveRecaptcha(siteKey: string, pageUrl: string, proxyUrl?: string): Promise<string | null> {
+export interface RecaptchaSolveResult {
+  token: string | null;
+  errors: Array<{ phase: string; type: string; error: string; errorCode?: string }>;
+}
+
+/**
+ * Solve reCAPTCHA for TeraBox signup — returns token + detailed error info.
+ * The errors array captures WHY each attempt failed, so the detail button
+ * can show the full technical error for debugging/sharing.
+ */
+export async function solveRecaptcha(siteKey: string, pageUrl: string, proxyUrl?: string): Promise<RecaptchaSolveResult> {
+  const errors: RecaptchaSolveResult['errors'] = [];
+
   if (!isCaptchaSolvConfigured()) {
     console.warn('[Captcha] CAPTCHASOLV_API_KEY not set — CAPTCHA solving disabled');
-    return null;
+    errors.push({ phase: 'config', type: 'all', error: 'CAPTCHASOLV_API_KEY not set' });
+    return { token: null, errors };
   }
 
   const proxyLabel = proxyUrl ? `via proxy (${proxyUrl.substring(0, 30)}...)` : 'proxyless';
@@ -199,17 +212,11 @@ export async function solveRecaptcha(siteKey: string, pageUrl: string, proxyUrl?
 
   try {
     // ★ Phase 1: Try v2 Enterprise + v2 Standard IN PARALLEL
-    // This cuts solve time by ~50% since the first success wins
-    // ★★★ BUG FIX: Use Promise.race pattern with cancellation to avoid burning
-    // both captcha credits (100 free/day) when only one result is needed.
-    // Previously, Promise.allSettled waited for BOTH to complete even if the
-    // first one succeeded — wasting the second credit unnecessarily.
     let v2Token: string | null = null;
 
     const v2EntPromise = solveRecaptchaV2Enterprise(siteKey, pageUrl, false, proxyUrl);
     const v2StdPromise = solveRecaptchaV2(siteKey, pageUrl, false, proxyUrl);
 
-    // Race: resolve as soon as either succeeds
     const v2RaceResult = await Promise.race([
       v2EntPromise.then(r => ({ source: 'ent' as const, result: r })),
       v2StdPromise.then(r => ({ source: 'std' as const, result: r })),
@@ -221,9 +228,11 @@ export async function solveRecaptcha(siteKey: string, pageUrl: string, proxyUrl?
         console.log(`[Captcha] ${v2RaceResult.source === 'ent' ? 'Enterprise' : 'Standard'} v2 solved (race winner)${v2RaceResult.result.solveTime ? ` in ${v2RaceResult.result.solveTime.toFixed(1)}s` : ''}${v2RaceResult.result.cost ? ` (cost: ${v2RaceResult.result.cost})` : ''}`);
         v2Token = token;
       }
+    } else {
+      errors.push({ phase: 'v2', type: v2RaceResult.source === 'ent' ? 'Enterprise' : 'Standard', error: v2RaceResult.result.error || 'Unknown error', errorCode: v2RaceResult.result.errorCode });
     }
 
-    // If race winner failed, check the other one (it might still be running)
+    // If race winner failed, check the other one
     if (!v2Token) {
       const otherSource = v2RaceResult.source === 'ent' ? 'std' : 'ent';
       const otherPromise = v2RaceResult.source === 'ent' ? v2StdPromise : v2EntPromise;
@@ -235,16 +244,19 @@ export async function solveRecaptcha(siteKey: string, pageUrl: string, proxyUrl?
             console.log(`[Captcha] ${otherSource === 'ent' ? 'Enterprise' : 'Standard'} v2 solved (fallback)${otherResult.solveTime ? ` in ${otherResult.solveTime.toFixed(1)}s` : ''}`);
             v2Token = token;
           }
+        } else {
+          errors.push({ phase: 'v2', type: otherSource === 'ent' ? 'Enterprise' : 'Standard', error: otherResult.error || 'Unknown error', errorCode: otherResult.errorCode });
         }
-      } catch {}
+      } catch (e) {
+        errors.push({ phase: 'v2', type: otherSource === 'ent' ? 'Enterprise' : 'Standard', error: `Exception: ${(e as Error).message}` });
+      }
     }
 
-    if (v2Token) return v2Token;
+    if (v2Token) return { token: v2Token, errors };
 
-    console.warn(`[Captcha] v2 parallel failed`);
+    console.warn(`[Captcha] v2 parallel failed`, errors.filter(e => e.phase === 'v2').map(e => `${e.type}: ${e.error}`).join('; '));
 
-    // ★ Phase 2: Try v3 variants in parallel (fast 3-5s each)
-    // Same race pattern to save credits
+    // ★ Phase 2: Try v3 variants in parallel
     let v3Token: string | null = null;
 
     const v3EntPromise = solveRecaptchaV3Enterprise(siteKey, pageUrl, 0.3, 'register', proxyUrl);
@@ -261,6 +273,8 @@ export async function solveRecaptcha(siteKey: string, pageUrl: string, proxyUrl?
         console.log(`[Captcha] ${v3RaceResult.source === 'ent' ? 'Enterprise' : 'Standard'} v3 solved (race winner)${v3RaceResult.result.solveTime ? ` in ${v3RaceResult.result.solveTime.toFixed(1)}s` : ''}`);
         v3Token = token;
       }
+    } else {
+      errors.push({ phase: 'v3', type: v3RaceResult.source === 'ent' ? 'Enterprise' : 'Standard', error: v3RaceResult.result.error || 'Unknown error', errorCode: v3RaceResult.result.errorCode });
     }
 
     if (!v3Token) {
@@ -274,17 +288,22 @@ export async function solveRecaptcha(siteKey: string, pageUrl: string, proxyUrl?
             console.log(`[Captcha] ${otherSource === 'ent' ? 'Enterprise' : 'Standard'} v3 solved (fallback)${otherResult.solveTime ? ` in ${otherResult.solveTime.toFixed(1)}s` : ''}`);
             v3Token = token;
           }
+        } else {
+          errors.push({ phase: 'v3', type: otherSource === 'ent' ? 'Enterprise' : 'Standard', error: otherResult.error || 'Unknown error', errorCode: otherResult.errorCode });
         }
-      } catch {}
+      } catch (e) {
+        errors.push({ phase: 'v3', type: otherSource === 'ent' ? 'Enterprise' : 'Standard', error: `Exception: ${(e as Error).message}` });
+      }
     }
 
-    if (v3Token) return v3Token;
+    if (v3Token) return { token: v3Token, errors };
 
-    console.error(`[Captcha] All strategies failed.`);
-    return null;
+    console.error(`[Captcha] All strategies failed.`, errors);
+    return { token: null, errors };
   } catch (err) {
     console.error(`[Captcha] Fatal error: ${(err as Error).message}`);
-    return null;
+    errors.push({ phase: 'fatal', type: 'all', error: (err as Error).message });
+    return { token: null, errors };
   }
 }
 

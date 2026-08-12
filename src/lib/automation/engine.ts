@@ -223,7 +223,7 @@ async function executeApiSignup(
           // NOT the referral share link! TeraBox renders reCAPTCHA on the main page's signup modal.
           // Using the share link as websiteURL causes token domain mismatch → rejected!
           const teraboxPageUrl = 'https://www.1024terabox.com/';
-          const captchaToken = await solveCaptchaForSignup(siteKey, teraboxPageUrl, _proxy?.url);
+          const captchaToken = await solveCaptchaForSignup(siteKey, teraboxPageUrl, _proxy?.url, signupId);
 
           if (captchaToken) {
             gIdentity = captchaToken;
@@ -345,7 +345,7 @@ async function executeApiSignup(
         const siteKey = await getRecaptchaSiteKeyDynamic(_proxy?.url);
         for (let vAttempt = 0; vAttempt < MAX_CAPTCHA_RETRIES; vAttempt++) {
           const teraboxPageUrl = 'https://www.1024terabox.com/';
-          const captchaToken = await solveCaptchaForSignup(siteKey, teraboxPageUrl, _proxy?.url);
+          const captchaToken = await solveCaptchaForSignup(siteKey, teraboxPageUrl, _proxy?.url, signupId);
           if (captchaToken) {
             gIdentity = captchaToken;
             steps.push(`Verify captcha solved — retrying verify (attempt ${vAttempt + 1})...`);
@@ -395,7 +395,7 @@ async function executeApiSignup(
         const siteKey = await getRecaptchaSiteKeyDynamic(_proxy?.url);
         for (let fAttempt = 0; fAttempt < MAX_CAPTCHA_RETRIES; fAttempt++) {
           const teraboxPageUrl = 'https://www.1024terabox.com/';
-          const captchaToken = await solveCaptchaForSignup(siteKey, teraboxPageUrl, _proxy?.url);
+          const captchaToken = await solveCaptchaForSignup(siteKey, teraboxPageUrl, _proxy?.url, signupId);
           if (captchaToken) {
             gIdentity = captchaToken;
             steps.push(`Finish captcha solved — retrying finish (attempt ${fAttempt + 1})...`);
@@ -443,9 +443,10 @@ function generateApiPassword(length = 14): string {
  * Without proxy, CaptchaSolv solves from their IP ≠ your proxy IP → token REJECTED.
  * With proxy, CaptchaSolv solves from YOUR proxy IP → token accepted!
  */
-async function solveCaptchaForSignup(siteKey: string, pageUrl: string, proxyUrl?: string): Promise<string | null> {
+async function solveCaptchaForSignup(siteKey: string, pageUrl: string, proxyUrl?: string, signupId?: string): Promise<string | null> {
   if (!isCaptchaConfigured()) {
     console.warn('[Engine] No captcha solver configured. Set CAPTCHASOLV_API_KEY (100 free/day)');
+    await log('error', 'CaptchaSolv not configured — set CAPTCHASOLV_API_KEY', signupId, { hint: 'Get API key from captchasolv.com (100 free solves/day)' });
     return null;
   }
   
@@ -453,48 +454,53 @@ async function solveCaptchaForSignup(siteKey: string, pageUrl: string, proxyUrl?
   // NOTE: Some API keys (e.g. free-tier keys) don't expose balance but have
   // daily free quota (e.g. 100 solves/day). We only WARN, never block —
   // the actual solve call will fail with a clear error if the key is truly invalid.
+  let balanceInfo = '';
   try {
     const { getBalance } = await import('@/lib/captcha');
     const balanceResult = await getBalance();
     if (balanceResult.error) {
+      balanceInfo = `error: ${balanceResult.error}`;
       console.warn(`[Engine] CaptchaSolv balance check error: ${balanceResult.error} — continuing anyway (key may have free daily quota)`);
     } else if (balanceResult.balance <= 0) {
+      balanceInfo = `balance: $${balanceResult.balance} (free-tier key — daily quota, not balance)`;
       console.warn(`[Engine] CaptchaSolv balance shows $${balanceResult.balance} — continuing anyway (free-tier keys have daily quota, not balance)`);
     } else {
+      balanceInfo = `balance: $${balanceResult.balance}`;
       console.log(`[Engine] CaptchaSolv balance: $${balanceResult.balance}`);
     }
   } catch {
-    // Balance check failed — continue anyway, the solve call will catch it
+    balanceInfo = 'check failed';
   }
   
   // ★★★ CRITICAL LOG: Show whether proxy is actually reaching the captcha solver
   console.log(`[Engine] solveCaptchaForSignup: siteKey=${siteKey.substring(0, 10)}..., proxyUrl=${proxyUrl || 'NONE (proxyless!)'}, pageUrl=${pageUrl.substring(0, 50)}...`);
   if (!proxyUrl) {
-    console.warn('[Engine] ★★★ NO PROXY for captcha solving — token will be from CaptchaSolv IP, likely REJECTED by TeraBox (errno 400090 loop)!');
+    console.warn('[Engine] ★★★ NO PROXY for captcha solving — solving proxyless (token may be IP-mismatched, but trying anyway)');
   }
   const startTime = Date.now();
-  const token = await solveRecaptcha(siteKey, pageUrl, proxyUrl);
-  if (token) {
+  const result = await solveRecaptcha(siteKey, pageUrl, proxyUrl);
+  if (result.token) {
     const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
-    console.log(`[Engine] Captcha solved in ${elapsed}s — token length: ${token.length}${proxyUrl ? ' (proxy-bound)' : ' (proxyless!)'}`);
+    console.log(`[Engine] Captcha solved in ${elapsed}s — token length: ${result.token.length}${proxyUrl ? ' (proxy-bound)' : ' (proxyless!)'}`);
   } else {
-    console.error('[Engine] Captcha solve returned null — CaptchaSolv API may be down or key invalid');
-    // Log to ActivityLog so it shows up in the detail button
-    try {
-      const { getBalance } = await import('@/lib/captcha');
-      const bal = await getBalance();
-      await log('error', 'CaptchaSolv returned null token', undefined, {
-        siteKey: siteKey.substring(0, 20),
-        pageUrl,
-        proxyUsed: proxyUrl || 'proxyless',
-        solveTime: ((Date.now() - startTime) / 1000).toFixed(1) + 's',
-        balanceCheck: bal.error ? `error: ${bal.error}` : `balance: $${bal.balance}`,
-        apiKeySet: !!process.env.CAPTCHASOLV_API_KEY,
-        apiKeyPrefix: process.env.CAPTCHASOLV_API_KEY?.substring(0, 8) + '...',
-      });
-    } catch {}
+    const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
+    console.error('[Engine] Captcha solve failed — all strategies returned errors');
+    // ★★★ Log FULL technical error to ActivityLog so the detail button shows everything
+    const errorDetails = result.errors.map(e => `[${e.phase}/${e.type}] ${e.error}${e.errorCode ? ` (code: ${e.errorCode})` : ''}`);
+    await log('error', `Captcha solve FAILED — ${result.errors.length} attempts failed in ${elapsed}s`, signupId, {
+      solveErrors: errorDetails,
+      allErrors: result.errors,
+      siteKey: siteKey.substring(0, 20),
+      fullSiteKey: siteKey,
+      pageUrl,
+      proxyUsed: proxyUrl || 'proxyless',
+      solveTime: elapsed + 's',
+      balanceInfo,
+      apiKeySet: !!process.env.CAPTCHASOLV_API_KEY,
+      apiKeyPrefix: process.env.CAPTCHASOLV_API_KEY?.substring(0, 8) + '...',
+    });
   }
-  return token;
+  return result.token;
 }
 
 // ─── Natural Delay (anti-fingerprinting) ───
@@ -638,7 +644,7 @@ export async function executeSignup(referralLink: string): Promise<SignupResult>
                 const siteKey = await getRecaptchaSiteKeyDynamic(proxy?.url);
                 const teraboxPageUrl = 'https://www.1024terabox.com/';
                 for (let lAttempt = 0; lAttempt < 3; lAttempt++) {
-                  const captchaToken = await solveCaptchaForSignup(siteKey, teraboxPageUrl, proxy?.url);
+                  const captchaToken = await solveCaptchaForSignup(siteKey, teraboxPageUrl, proxy?.url, signup.id);
                   if (captchaToken) {
                     referralSteps.push(`Login captcha solved (attempt ${lAttempt + 1}) — retrying with g_identity...`);
                     await naturalDelay(500, 1000);

@@ -28,8 +28,9 @@ async function main() {
     const t0 = Date.now();
     const token = await solveRecaptcha(sk1, 'https://www.1024terabox.com/', undefined);
     console.log(`Time: ${((Date.now()-t0)/1000).toFixed(1)}s`);
-    console.log(`Token len: ${token?.length || 0}`);
-    console.log(`Token preview: ${token?.substring(0, 30) || 'NONE'}...`);
+    console.log(`Token len: ${token?.token?.length || 0}`);
+    console.log(`Token preview: ${token?.token?.substring(0, 30) || 'NONE'}...`);
+    if (token?.errors?.length) console.log(`Errors: ${JSON.stringify(token.errors)}`);
 
     // Now test the sendcode API directly to see if token works
     console.log('\n=== Testing sendcode with token ===');
@@ -53,8 +54,8 @@ async function main() {
     catch { enc = email.address; }
     
     // sendcode WITH the token
-    if (token) {
-      const res = await tb.sendVerificationCode(enc, token, isEnc);
+    if (token?.token) {
+      const res = await tb.sendVerificationCode(enc, token.token, isEnc);
       console.log(`Result: success=${res.success} errno=${res.errno} error=${res.error||'none'}`);
       if (res.rawResponse) console.log(`RAW: ${JSON.stringify(res.rawResponse)}`);
     }
