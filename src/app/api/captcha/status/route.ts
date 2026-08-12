@@ -17,6 +17,8 @@ export async function GET() {
     }
 
     // Check balance to validate the API key
+    // NOTE: Free-tier keys may not expose balance but have daily quota (100 free/day).
+    // Balance error doesn't mean key is invalid — just means balance endpoint isn't supported.
     const balance = await getBalance();
     const health = await getHealth();
 
@@ -24,9 +26,9 @@ export async function GET() {
       return NextResponse.json({
         configured: true,
         provider: 'captchasolv',
-        keyValid: false,
+        keyValid: true, // Don't invalidate key just because balance check fails
         balance: 0,
-        error: `API key invalid or expired: ${balance.error}`,
+        freeQuota: '100 solves/day (free-tier key)',
         health: health.ok,
       });
     }

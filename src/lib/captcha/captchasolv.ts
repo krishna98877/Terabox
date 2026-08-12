@@ -186,6 +186,13 @@ async function apiPost(
       throw new Error(`CaptchaSolv API ${res.status}: ${errText}`);
     }
 
+    // Check Content-Type to avoid parsing HTML as JSON
+    const contentType = res.headers.get('content-type') || '';
+    if (!contentType.includes('json')) {
+      const text = await res.text().catch(() => '');
+      throw new Error(`CaptchaSolv API returned non-JSON response (${contentType}): ${text.substring(0, 100)}`);
+    }
+
     return await res.json();
   } catch (error) {
     clearTimeout(timer);
@@ -534,8 +541,9 @@ export async function solveRecaptchaV2(
     const result = await solveSync(key, task);
     if (result.success) return result;
 
-    // If sync timed out or got 504, retry with async
-    if (result.error?.includes('504') || result.error?.includes('abort') || result.error?.includes('Timeout')) {
+    // If sync failed (timeout, 504, non-JSON response, parse error), retry with async
+    if (result.error?.includes('504') || result.error?.includes('abort') || result.error?.includes('Timeout') ||
+        result.error?.includes('non-JSON') || result.error?.includes('Unexpected token')) {
       console.warn(`[CaptchaSolv] Sync failed (${result.error?.substring(0, 50)}), switching to async mode...`);
       return solveWithRetryAsync(key, task, 'reCAPTCHA v2 (async fallback)');
     }

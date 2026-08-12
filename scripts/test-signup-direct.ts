@@ -1,150 +1,103 @@
 /**
- * Direct test script for signup engine — NO PROXY
- * Runs outside Next.js, directly tests the TeraBox API + captcha flow
+ * Direct signup test script — runs the engine WITHOUT going through the HTTP server.
+ * This avoids Next.js dev server crashes and gives us direct console output.
+ * 
+ * Tests: signup WITHOUT proxy (per user's request)
  */
-
-// Load env
-import { config } from 'dotenv';
-config({ path: '/home/z/my-project/.env' });
-
-import { TeraBoxSession, isCaptchaErrno, getRecaptchaSiteKeyDynamic } from '../src/lib/terabox/api';
-import { isCaptchaConfigured, solveRecaptcha } from '../src/lib/captcha';
+import { executeSignup } from '../src/lib/automation/engine';
+import { db } from '../src/lib/db';
+import { PrismaClient } from '@prisma/client';
 
 const REFERRAL_LINK = 'https://1024terabox.com/s/1_9hqBxA_U6WRc9FUhHl1zQ';
 
 async function main() {
-  console.log('=== LIVE TEST — NO PROXY ===\n');
-  
-  // Step 1: Create session (no proxy)
-  const sessionId = `test-${Date.now().toString(36)}`;
-  const tbSession = new TeraBoxSession(sessionId);
-  tbSession.setProxyUrl(null); // NO PROXY
-  console.log('[1] Session created (no proxy)\n');
+  console.log('═══════════════════════════════════════════════════');
+  console.log('  LIVE SIGNUP TEST — NO PROXY (direct connection)');
+  console.log('═══════════════════════════════════════════════════');
+  console.log(`Referral Link: ${REFERRAL_LINK}`);
+  console.log(`Time: ${new Date().toISOString()}`);
+  console.log('');
 
-  // Step 2: Visit share link first (sets referral cookies)
-  console.log('[2] Visiting share link...');
+  // Ensure config exists
+  let config = await db.referralConfig.findFirst();
+  if (!config) {
+    config = await db.referralConfig.create({
+      data: {
+        masterLink: REFERRAL_LINK,
+        isActive: true,
+        autoSignup: false,
+        signupInterval: 30,
+        maxSignupsPerDay: 50,
+      },
+    });
+    console.log('Created default config');
+  } else if (!config.masterLink) {
+    config = await db.referralConfig.update({
+      where: { id: config.id },
+      data: { masterLink: REFERRAL_LINK },
+    });
+    console.log('Updated config with default masterLink');
+  }
+  console.log(`Config: masterLink=${config.masterLink}, isActive=${config.isActive}`);
+
+  // Check captcha status
+  const apiKey = process.env.CAPTCHASOLV_API_KEY;
+  console.log(`CAPTCHASOLV_API_KEY: ${apiKey ? apiKey.substring(0, 8) + '...' : 'NOT SET'}`);
+
+  // Clear proxy pool to force direct connection
+  console.log('');
+  console.log('─── Clearing proxy pool (forcing NO PROXY) ───');
+  // We'll just let the engine's getNextProxy return null naturally
+
+  console.log('');
+  console.log('─── Starting signup attempt ───');
+  const startTime = Date.now();
+
   try {
-    const visitResult = await tbSession.visitShareLink(REFERRAL_LINK);
-    console.log(`    Result: ${visitResult.success ? 'OK' : visitResult.error}`);
-    if (visitResult.error) console.log(`    Full response:`, JSON.stringify(visitResult).substring(0, 500));
-  } catch (err) {
-    console.log(`    Visit error: ${(err as Error).message}`);
-  }
-  console.log('');
-
-  // Step 3: Get RSA public key
-  console.log('[3] Getting RSA public key...');
-  const pubkey = await tbSession.getPubKey();
-  if (!pubkey) {
-    console.log('    FATAL: Could not get public key. Aborting.');
-    process.exit(1);
-  }
-  console.log(`    Pubkey: ${pubkey.pubkey?.substring(0, 30)}...`);
-  console.log('');
-
-  // Step 4: Create temp email
-  console.log('[4] Creating temp email (CatchMail.io)...');
-  const { createTempEmail } = await import('../src/lib/catchmail');
-  const tempEmail = await createTempEmail();
-  console.log(`    Email: ${tempEmail.address}`);
-  console.log('');
-
-  // Step 5: Encrypt email
-  console.log('[5] Encrypting email...');
-  const { encryptEmail } = await import('../src/lib/terabox/api');
-  let encryptedEmail: string;
-  let isEncrypted = false;
-  try {
-    encryptedEmail = await encryptEmail(tempEmail.address, pubkey.pubkey);
-    isEncrypted = true;
-    console.log(`    Encrypted: ${encryptedEmail.substring(0, 20)}...`);
-  } catch (err) {
-    encryptedEmail = tempEmail.address;
-    console.log(`    Encryption failed: ${(err as Error).message} — using plaintext`);
-  }
-  console.log('');
-
-  // Step 6: Send verification code (first attempt — likely needs captcha)
-  console.log('[6] Sending verification code (attempt 1 — no captcha token)...');
-  let sendResult = await tbSession.sendVerificationCode(encryptedEmail, undefined, isEncrypted);
-  console.log(`    Result: success=${sendResult.success}, errno=${sendResult.errno}, error=${sendResult.error || 'none'}`);
-  console.log(`    needsCaptcha=${sendResult.needsCaptcha}`);
-  if (sendResult.rawResponse) {
-    console.log(`    RAW API RESPONSE: ${JSON.stringify(sendResult.rawResponse, null, 2)}`);
-  }
-  console.log('');
-
-  // Step 7: If captcha required, solve it
-  if (sendResult.needsCaptcha) {
-    console.log('[7] Captcha required! Attempting to solve...');
+    const result = await executeSignup(REFERRAL_LINK);
+    const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
     
-    if (!isCaptchaConfigured()) {
-      console.log('    FATAL: CAPTCHASOLV_API_KEY not set! Cannot solve captcha.');
-      console.log('    Set it in .env file');
-      process.exit(1);
+    console.log('');
+    console.log('═══════════════════════════════════════════════════');
+    console.log(`  RESULT (${elapsed}s)`);
+    console.log('═══════════════════════════════════════════════════');
+    console.log(`Success: ${result.success}`);
+    console.log(`Email: ${result.email}`);
+    console.log(`Status: ${result.status}`);
+    if (result.error) console.log(`Error: ${result.error}`);
+    if (result.proxyUsed) console.log(`Proxy Used: ${result.proxyUsed}`);
+    if (result.steps) {
+      console.log('');
+      console.log('─── Steps ───');
+      result.steps.forEach((step, i) => console.log(`  ${i + 1}. ${step}`));
     }
-    
-    console.log('    Getting reCAPTCHA sitekey (dynamic)...');
-    const siteKey = await getRecaptchaSiteKeyDynamic(undefined); // no proxy
-    console.log(`    Sitekey: ${siteKey?.substring(0, 15)}...`);
-    
-    const MAX_RETRIES = 3;
-    for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
-      console.log(`\n    --- Captcha solve attempt ${attempt + 1}/${MAX_RETRIES} ---`);
-      console.log('    Solving reCAPTCHA (NO PROXY — proxyless token)...');
-      
-      const startTime = Date.now();
-      const captchaToken = await solveRecaptcha(siteKey, 'https://www.1024terabox.com/', undefined); // NO PROXY
-      const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
-      
-      if (!captchaToken) {
-        console.log(`    Captcha solve FAILED after ${elapsed}s`);
-        continue;
-      }
-      
-      console.log(`    Captcha solved in ${elapsed}s — token length: ${captchaToken.length}`);
-      console.log(`    Token preview: ${captchaToken.substring(0, 20)}...`);
-      
-      // Retry sendcode with captcha token
-      console.log('    Retrying sendcode with captcha token...');
-      await new Promise(r => setTimeout(r, 1000)); // natural delay
-      
-      sendResult = await tbSession.sendVerificationCode(encryptedEmail, captchaToken, isEncrypted);
-      console.log(`    Result: success=${sendResult.success}, errno=${sendResult.errno}, error=${sendResult.error || 'none'}`);
-      if (sendResult.rawResponse) {
-        console.log(`    RAW API RESPONSE: ${JSON.stringify(sendResult.rawResponse, null, 2)}`);
-      }
-      
-      if (sendResult.success) {
-        console.log('\n    ★★★ CAPTCHA ACCEPTED — OTP SENT! ★★★');
-        break;
-      }
-      
-      if (isCaptchaErrno(sendResult.errno)) {
-        console.log(`    Token rejected (errno ${sendResult.errno}) — will retry with fresh token`);
-        continue;
-      }
-      
-      // Different error
-      console.log(`    Different error (not captcha) — stopping`);
-      break;
-    }
+  } catch (err) {
+    const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
+    console.log('');
+    console.log('═══════════════════════════════════════════════════');
+    console.log(`  FATAL ERROR (${elapsed}s)`);
+    console.log('═══════════════════════════════════════════════════');
+    console.error(err);
   }
+
+  // Fetch and display activity logs for this test
+  console.log('');
+  console.log('─── Activity Logs (last 20) ───');
+  const logs = await db.activityLog.findMany({
+    take: 20,
+    orderBy: { createdAt: 'desc' },
+  });
   
-  console.log('\n=== TEST COMPLETE ===');
-  console.log(`Final sendcode result: success=${sendResult.success}, errno=${sendResult.errno}`);
-  if (!sendResult.success) {
-    console.log(`Error: ${sendResult.error}`);
-    if (sendResult.rawResponse) {
-      console.log(`Raw response: ${JSON.stringify(sendResult.rawResponse, null, 2)}`);
-    }
-  } else {
-    console.log(`Token: ${sendResult.token?.substring(0, 10)}...`);
-    console.log('OTP was sent successfully! The rest of the flow would work from here.');
+  for (const log of logs) {
+    const time = new Date(log.createdAt).toLocaleTimeString();
+    const metaStr = log.metadata ? ` [metadata: ${log.metadata.substring(0, 200)}${log.metadata.length > 200 ? '...' : ''}]` : '';
+    console.log(`  [${time}] ${log.type.toUpperCase()}: ${log.message}${metaStr}`);
   }
+
+  await db.$disconnect();
 }
 
 main().catch(err => {
-  console.error('FATAL:', err);
+  console.error('Fatal:', err);
   process.exit(1);
 });

@@ -210,7 +210,7 @@ async function executeApiSignup(
     const MAX_CAPTCHA_RETRIES = 3;
     if (sendResult.needsCaptcha) {
       steps.push('reCAPTCHA required — attempting to solve...');
-      await log('info', `reCAPTCHA required by TeraBox (errno ${sendResult.errno}) — solving captcha...`, signupId, { errno: sendResult.errno });
+      await log('info', `reCAPTCHA required by TeraBox (errno ${sendResult.errno}) — solving captcha...`, signupId, { errno: sendResult.errno, rawResponse: sendResult.rawResponse, needsCaptcha: sendResult.needsCaptcha, proxyUsed: _proxy?.url || 'direct', email: email.substring(0, 3) + '***' + email.split('@')[1] });
 
       if (isCaptchaConfigured()) {
         const siteKey = await getRecaptchaSiteKeyDynamic(_proxy?.url);
@@ -241,7 +241,7 @@ async function executeApiSignup(
             // Captcha was solved but TeraBox still rejected it (token expired? wrong type?)
             if (sendResult.needsCaptcha || isCaptchaErrno(sendResult.errno)) {
               steps.push(`Token rejected (errno ${sendResult.errno}) — getting fresh token...`);
-              await log('warn', `Captcha token rejected by TeraBox (errno ${sendResult.errno})`, signupId, { errno: sendResult.errno, attempt: captchaAttempt + 1, tokenLen: captchaToken.length });
+              await log('warn', `Captcha token rejected by TeraBox (errno ${sendResult.errno})`, signupId, { errno: sendResult.errno, attempt: captchaAttempt + 1, tokenLen: captchaToken.length, rawResponse: sendResult.rawResponse, needsCaptcha: sendResult.needsCaptcha, proxyUsed: _proxy?.url || 'direct', sitekey: siteKey.substring(0, 20) });
               continue; // Try again with a fresh captcha solve
             }
 
@@ -249,7 +249,7 @@ async function executeApiSignup(
             break;
           } else {
             steps.push(`Captcha solve attempt ${captchaAttempt + 1} failed — ${captchaAttempt < MAX_CAPTCHA_RETRIES - 1 ? 'retrying...' : 'giving up'}`);
-            await log('error', `Captcha solve failed (attempt ${captchaAttempt + 1}/${MAX_CAPTCHA_RETRIES})`, signupId, { siteKey: siteKey.substring(0, 10), pageUrl: teraboxPageUrl, proxyUsed: !!_proxy?.url });
+            await log('error', `Captcha solve failed (attempt ${captchaAttempt + 1}/${MAX_CAPTCHA_RETRIES})`, signupId, { siteKey: siteKey.substring(0, 20), fullSiteKey: siteKey, pageUrl: teraboxPageUrl, proxyUsed: _proxy?.url || 'direct', captchaConfigured: isCaptchaConfigured(), apiKeySet: !!process.env.CAPTCHASOLV_API_KEY });
           }
         }
       } else {
@@ -450,19 +450,18 @@ async function solveCaptchaForSignup(siteKey: string, pageUrl: string, proxyUrl?
   }
   
   // ★★★ Pre-flight check: Validate CaptchaSolv API key by checking balance
-  // This catches expired/invalid keys early instead of failing silently
+  // NOTE: Some API keys (e.g. free-tier keys) don't expose balance but have
+  // daily free quota (e.g. 100 solves/day). We only WARN, never block —
+  // the actual solve call will fail with a clear error if the key is truly invalid.
   try {
     const { getBalance } = await import('@/lib/captcha');
     const balanceResult = await getBalance();
     if (balanceResult.error) {
-      console.error(`[Engine] ★★★ CAPTCHASOLV API KEY INVALID: ${balanceResult.error}`);
-      console.error('[Engine] Captcha solving will fail! Update CAPTCHASOLV_API_KEY in .env file');
-      return null;
-    }
-    if (balanceResult.balance <= 0) {
-      console.error(`[Engine] ★★★ CAPTCHASOLV BALANCE EMPTY: $${balanceResult.balance}`);
-      console.error('[Engine] Add funds at captchasolv.com or get a new key');
-      return null;
+      console.warn(`[Engine] CaptchaSolv balance check error: ${balanceResult.error} — continuing anyway (key may have free daily quota)`);
+    } else if (balanceResult.balance <= 0) {
+      console.warn(`[Engine] CaptchaSolv balance shows $${balanceResult.balance} — continuing anyway (free-tier keys have daily quota, not balance)`);
+    } else {
+      console.log(`[Engine] CaptchaSolv balance: $${balanceResult.balance}`);
     }
   } catch {
     // Balance check failed — continue anyway, the solve call will catch it
@@ -480,6 +479,20 @@ async function solveCaptchaForSignup(siteKey: string, pageUrl: string, proxyUrl?
     console.log(`[Engine] Captcha solved in ${elapsed}s — token length: ${token.length}${proxyUrl ? ' (proxy-bound)' : ' (proxyless!)'}`);
   } else {
     console.error('[Engine] Captcha solve returned null — CaptchaSolv API may be down or key invalid');
+    // Log to ActivityLog so it shows up in the detail button
+    try {
+      const { getBalance } = await import('@/lib/captcha');
+      const bal = await getBalance();
+      await log('error', 'CaptchaSolv returned null token', undefined, {
+        siteKey: siteKey.substring(0, 20),
+        pageUrl,
+        proxyUsed: proxyUrl || 'proxyless',
+        solveTime: ((Date.now() - startTime) / 1000).toFixed(1) + 's',
+        balanceCheck: bal.error ? `error: ${bal.error}` : `balance: $${bal.balance}`,
+        apiKeySet: !!process.env.CAPTCHASOLV_API_KEY,
+        apiKeyPrefix: process.env.CAPTCHASOLV_API_KEY?.substring(0, 8) + '...',
+      });
+    } catch {}
   }
   return token;
 }

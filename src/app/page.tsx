@@ -526,7 +526,7 @@ export default function DashboardPage() {
             <div className="mb-4 p-2.5 rounded-lg bg-emerald-500/10 border border-emerald-500/20 flex items-center gap-2">
               <Shield className="w-4 h-4 text-emerald-400 shrink-0" />
               <span className="text-xs text-emerald-300">
-                CaptchaSolv active — Balance: ${captchaStatus.balance?.toFixed(4) || '0'}
+                CaptchaSolv active — {(captchaStatus as any).freeQuota ? (captchaStatus as any).freeQuota : `Balance: $${captchaStatus.balance?.toFixed(5) || '0'}`}
               </span>
             </div>
           )}
@@ -976,7 +976,7 @@ export default function DashboardPage() {
                       <CheckCircle2 className="w-4 h-4 text-emerald-400" />
                       <div>
                         <div className="text-xs font-medium text-emerald-300">CaptchaSolv Active</div>
-                        <div className="text-[10px] text-emerald-400/70">Balance: ${captchaStatus.balance?.toFixed(4) || '0'} — 100 free solves/day</div>
+                        <div className="text-[10px] text-emerald-400/70">{(captchaStatus as any)?.freeQuota ? `${(captchaStatus as any).freeQuota}` : `Balance: $${captchaStatus.balance?.toFixed(5) || '0'}`}</div>
                       </div>
                     </div>
                   ) : (

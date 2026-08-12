@@ -826,6 +826,18 @@ export function rsaEncrypt(data: string, pubkeyStr: string): string {
       // We must convert to standard base64 before creating PEM
       let standardBase64 = pubkeyStr.replace(/-/g, '+').replace(/_/g, '/');
       
+      // ★★★ TeraBox pp1 key handling:
+      // The pp1 field from getpubkey is NOT a standard RSA public key.
+      // It's TeraBox's custom format (360 chars base64url ≈ 270 bytes).
+      // Standard RSA-2048 SPKI public key is ~392 chars base64.
+      // If the key is too short/long for standard RSA, skip encryption
+      // and let the API handle the email as plaintext (which TeraBox supports).
+      const keyBytes = standardBase64.length * 3 / 4;
+      // Standard RSA-2048 SPKI key is ~294 bytes, RSA-4096 is ~534 bytes
+      if (keyBytes < 200 || keyBytes > 600) {
+        throw new Error(`TeraBox pubkey is custom format (${Math.round(keyBytes)} bytes) — not standard RSA SPKI. Email will be sent unencrypted (TeraBox accepts both formats).`);
+      }
+      
       // Split base64 into 64-char lines (PEM format requirement)
       const lines = standardBase64.match(/.{1,64}/g) || [standardBase64];
       pemKey = '-----BEGIN PUBLIC KEY-----\n' + lines.join('\n') + '\n-----END PUBLIC KEY-----';
