@@ -542,28 +542,22 @@ export async function solveRecaptchaV2(
 
   console.log(`[CaptchaSolv] Solving reCAPTCHA v2${invisible ? ' (invisible)' : ''} for ${pageUrl.substring(0, 60)}... (task type: ${task.type})`);
 
-  // Try sync first (fast when it works), fallback to async if sync fails with timeout/504
-  for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
-    const result = await solveSync(key, task);
-    if (result.success) return result;
+  // ★★★ Try sync first (fast when it works), then async if sync fails
+  // IMPORTANT: For reCAPTCHA v2 with proxy, the sync /solve endpoint often returns
+  // ERROR_CAPTCHA_UNSOLVABLE, but the async /createTask endpoint works!
+  // This is because async gives the solver more time (40-90s) vs sync's 120s gateway timeout.
+  const syncResult = await solveSync(key, task);
+  if (syncResult.success) return syncResult;
 
-    // If sync failed (timeout, 504, non-JSON response, parse error), retry with async
-    if (result.error?.includes('504') || result.error?.includes('abort') || result.error?.includes('Timeout') ||
-        result.error?.includes('non-JSON') || result.error?.includes('Unexpected token')) {
-      console.warn(`[CaptchaSolv] Sync failed (${result.error?.substring(0, 50)}), switching to async mode...`);
-      return solveWithRetryAsync(key, task, 'reCAPTCHA v2 (async fallback)');
-    }
-
-    if (!RETRYABLE_ERRORS.has(result.errorCode || '')) {
-      return result; // Fatal error, don't retry
-    }
-
-    console.warn(`[CaptchaSolv] reCAPTCHA v2 unsolvable (attempt ${attempt + 1}/${MAX_RETRIES}), retrying...`);
-    if (attempt < MAX_RETRIES - 1) {
-      await new Promise(r => setTimeout(r, 2000));
-    }
+  // If sync failed, try async mode (works for proxy-bound tasks where sync fails)
+  if (syncResult.errorCode === 'ERROR_CAPTCHA_UNSOLVABLE' || syncResult.errorCode === 'ERROR_LIMIT_EXCEEDED' ||
+      syncResult.error?.includes('504') || syncResult.error?.includes('abort') || syncResult.error?.includes('Timeout')) {
+    console.warn(`[CaptchaSolv] Sync failed (${syncResult.errorCode}: ${syncResult.error?.substring(0, 50)}), switching to async mode...`);
+    return solveWithRetryAsync(key, task, `reCAPTCHA v2${invisible ? ' invisible' : ''} (async)`);
   }
-  return { success: false, error: 'Max retries exceeded for reCAPTCHA v2', provider: 'captchasolv' };
+
+  // Non-retryable sync error
+  return syncResult;
 }
 
 /**

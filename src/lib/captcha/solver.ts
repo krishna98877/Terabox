@@ -198,13 +198,12 @@ export interface RecaptchaSolveResult {
  * The errors array captures WHY each attempt failed, so the detail button
  * can show the full technical error for debugging/sharing.
  *
- * ★★★ STRATEGY (updated based on live testing):
- * 1. WITH PROXY: Try v2 Standard FIRST (proven to work! solves in ~5s)
- *    Then try v2 Enterprise if Standard fails (Enterprise often returns UNSOLVABLE)
- * 2. WITHOUT PROXY: Try v2 Standard then Enterprise sequentially
- *    (both likely fail proxyless, but at least we get clear error info)
+ * ★★★ STRATEGY (updated based on live testing 2024-08-12):
+ * TeraBox uses Enterprise reCAPTCHA — v2 Standard tokens get REJECTED (errno 400090)!
+ * 1. WITH PROXY: Try v2 Enterprise FIRST (async mode — solves in ~10s with proxy!)
+ *    Then try v2 Standard as fallback (gets token but TeraBox may reject it)
+ * 2. WITHOUT PROXY: Enterprise almost always UNSOLVABLE proxyless
  * 3. SEQUENTIAL (not parallel) to avoid CaptchaSolv's concurrent task limit
- *    (free tier: 1-2 concurrent tasks; parallel causes ERROR_LIMIT_EXCEEDED)
  * 4. v3 variants as last resort (lower success rate for TeraBox)
  */
 export async function solveRecaptcha(siteKey: string, pageUrl: string, proxyUrl?: string): Promise<RecaptchaSolveResult> {
@@ -220,22 +219,8 @@ export async function solveRecaptcha(siteKey: string, pageUrl: string, proxyUrl?
   console.log(`[Captcha] Solving reCAPTCHA for ${pageUrl.substring(0, 60)}... (provider: captchasolv, sequential strategy, ${proxyLabel})`);
 
   try {
-    // ★ Phase 1: Try v2 Standard FIRST (proven to work with proxy!)
-    console.log(`[Captcha] Phase 1: v2 Standard${proxyUrl ? ' (proxy-bound)' : ' (proxyless)'}...`);
-    const v2StdResult = await solveRecaptchaV2(siteKey, pageUrl, false, proxyUrl);
-
-    if (v2StdResult.success) {
-      const token = v2StdResult.solution?.token || v2StdResult.solution?.gRecaptchaResponse;
-      if (token) {
-        console.log(`[Captcha] v2 Standard solved!${v2StdResult.solveTime ? ` in ${v2StdResult.solveTime.toFixed(1)}s` : ''}${v2StdResult.cost ? ` (cost: ${v2StdResult.cost})` : ''}`);
-        return { token, errors };
-      }
-    }
-    errors.push({ phase: 'v2', type: 'Standard', error: v2StdResult.error || 'Unknown error', errorCode: v2StdResult.errorCode });
-    console.warn(`[Captcha] v2 Standard failed: ${v2StdResult.error} (${v2StdResult.errorCode || 'no code'})`);
-
-    // ★ Phase 2: Try v2 Enterprise (often UNSOLVABLE with free proxies, but worth trying)
-    console.log(`[Captcha] Phase 2: v2 Enterprise${proxyUrl ? ' (proxy-bound)' : ' (proxyless)'}...`);
+    // ★ Phase 1: Try v2 Enterprise FIRST (TeraBox uses Enterprise — must match!)
+    console.log(`[Captcha] Phase 1: v2 Enterprise${proxyUrl ? ' (proxy-bound, async)' : ' (proxyless, async)'}...`);
     const v2EntResult = await solveRecaptchaV2Enterprise(siteKey, pageUrl, false, proxyUrl);
 
     if (v2EntResult.success) {
@@ -248,21 +233,21 @@ export async function solveRecaptcha(siteKey: string, pageUrl: string, proxyUrl?
     errors.push({ phase: 'v2', type: 'Enterprise', error: v2EntResult.error || 'Unknown error', errorCode: v2EntResult.errorCode });
     console.warn(`[Captcha] v2 Enterprise failed: ${v2EntResult.error} (${v2EntResult.errorCode || 'no code'})`);
 
-    // ★ Phase 3: Try v3 Standard (last resort — lower success rate for TeraBox)
-    console.log(`[Captcha] Phase 3: v3 Standard${proxyUrl ? ' (proxy-bound)' : ' (proxyless)'}...`);
-    const v3StdResult = await solveRecaptchaV3(siteKey, pageUrl, 0.3, 'register', proxyUrl);
+    // ★ Phase 2: Try v2 Standard as fallback (token may be rejected by TeraBox, but worth trying)
+    console.log(`[Captcha] Phase 2: v2 Standard${proxyUrl ? ' (proxy-bound)' : ' (proxyless)'}...`);
+    const v2StdResult = await solveRecaptchaV2(siteKey, pageUrl, false, proxyUrl);
 
-    if (v3StdResult.success) {
-      const token = v3StdResult.solution?.token || v3StdResult.solution?.gRecaptchaResponse;
+    if (v2StdResult.success) {
+      const token = v2StdResult.solution?.token || v2StdResult.solution?.gRecaptchaResponse;
       if (token) {
-        console.log(`[Captcha] v3 Standard solved!${v3StdResult.solveTime ? ` in ${v3StdResult.solveTime.toFixed(1)}s` : ''}`);
+        console.log(`[Captcha] v2 Standard solved (may be rejected by TeraBox — Enterprise required)!${v2StdResult.solveTime ? ` in ${v2StdResult.solveTime.toFixed(1)}s` : ''}`);
         return { token, errors };
       }
     }
-    errors.push({ phase: 'v3', type: 'Standard', error: v3StdResult.error || 'Unknown error', errorCode: v3StdResult.errorCode });
+    errors.push({ phase: 'v2', type: 'Standard', error: v2StdResult.error || 'Unknown error', errorCode: v2StdResult.errorCode });
 
-    // ★ Phase 4: Try v3 Enterprise (absolute last resort)
-    console.log(`[Captcha] Phase 4: v3 Enterprise${proxyUrl ? ' (proxy-bound)' : ' (proxyless)'}...`);
+    // ★ Phase 3: Try v3 Enterprise (last resort)
+    console.log(`[Captcha] Phase 3: v3 Enterprise${proxyUrl ? ' (proxy-bound)' : ' (proxyless)'}...`);
     const v3EntResult = await solveRecaptchaV3Enterprise(siteKey, pageUrl, 0.3, 'register', proxyUrl);
 
     if (v3EntResult.success) {

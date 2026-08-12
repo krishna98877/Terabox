@@ -159,6 +159,22 @@ export class TeraBoxSession {
     return this.proxyUrl;
   }
 
+  /**
+   * ★★★ Get timeout for API calls — longer when using proxy (free proxies are slow)
+   * Direct: 25s (fast), Proxied: 60s (free proxies can be slow but still work)
+   */
+  private get timeout(): number {
+    return this.proxyUrl ? 60000 : 25000;
+  }
+
+  /**
+   * Short timeout for lightweight calls (pubkey, etc.)
+   * Direct: 15s, Proxied: 30s
+   */
+  private get shortTimeout(): number {
+    return this.proxyUrl ? 30000 : 15000;
+  }
+
   // ─── API Request ───
 
   private async passportPost(
@@ -191,7 +207,7 @@ export class TeraBoxSession {
           headers,
           body,
           redirect: 'follow',
-          signal: AbortSignal.timeout(25000),
+          signal: AbortSignal.timeout(this.timeout),
           cache: 'no-store',
           proxyUrl: this.proxyUrl || undefined,
         });
@@ -532,7 +548,7 @@ export class TeraBoxSession {
         const res = await proxiedFetch(`${baseUrl}/api/shorturlinfo?${qs}`, {
           headers,
           redirect: 'follow',
-          signal: AbortSignal.timeout(25000),
+          signal: AbortSignal.timeout(this.timeout),
           cache: 'no-store',
           proxyUrl: this.proxyUrl || undefined,
         });
@@ -691,7 +707,7 @@ export class TeraBoxSession {
       const res = await proxiedFetch(referralLink, {
         headers,
         redirect: 'follow',
-        signal: AbortSignal.timeout(25000),
+        signal: AbortSignal.timeout(this.timeout),
         cache: 'no-store',
         proxyUrl: this.proxyUrl || undefined,
       });
@@ -737,6 +753,7 @@ export function getRecaptchaSiteKey(): string {
 let _cachedSiteKey: string | null = null;
 let _cachedSiteKeyTime = 0;
 const SITEKEY_CACHE_TTL = 30 * 60 * 1000; // 30 min cache — sitekey rarely changes within a session
+const SITEKEY_FETCH_TIMEOUT = 30000; // 30s for sitekey extraction (can be slow through proxy)
 
 export async function extractRecaptchaSiteKey(proxyUrl?: string): Promise<string | null> {
   // Return cached if fresh
@@ -753,7 +770,7 @@ export async function extractRecaptchaSiteKey(proxyUrl?: string): Promise<string
           'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
         },
         redirect: 'follow',
-        signal: AbortSignal.timeout(15000),
+        signal: AbortSignal.timeout(SITEKEY_FETCH_TIMEOUT),
         cache: 'no-store',
         proxyUrl: proxyUrl || undefined,
       });
@@ -794,7 +811,7 @@ export async function extractRecaptchaSiteKey(proxyUrl?: string): Promise<string
         for (const match of jsBundleUrls) {
           try {
             const jsRes = await proxiedFetch(match[1], {
-              signal: AbortSignal.timeout(15000),
+              signal: AbortSignal.timeout(SITEKEY_FETCH_TIMEOUT),
               cache: 'no-store',
               proxyUrl: proxyUrl || undefined,
             });
@@ -818,7 +835,7 @@ export async function extractRecaptchaSiteKey(proxyUrl?: string): Promise<string
       for (const match of cdnPatterns) {
         try {
           const jsRes = await proxiedFetch(match[1], {
-            signal: AbortSignal.timeout(15000),
+            signal: AbortSignal.timeout(SITEKEY_FETCH_TIMEOUT),
             cache: 'no-store',
             proxyUrl: proxyUrl || undefined,
           });
