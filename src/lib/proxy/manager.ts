@@ -1,13 +1,20 @@
 /**
- * Proxy Rotation Manager — ProxyScrape.com ONLY.
+ * Proxy Rotation Manager — Multi-source with residential proxy support.
  *
  * ═══════════════════════════════════════════════════════════════════
- * SINGLE SOURCE: ProxyScrape v3 API (api.proxyscrape.com)
+ * PROXY SOURCES (in priority order):
+ *   0. Uploaded proxies (/upload/proxies.txt) — user-provided, trusted
+ *   1. Webshare.io — 10 FREE residential proxies (best for TeraBox!)
+ *   2. IPRoyal — pay-as-you-go residential proxies
+ *   3. ProxyScrape v3 API — free datacenter proxies (fallback)
  * ═══════════════════════════════════════════════════════════════════
  *
- * ProxyScrape provides the largest free proxy pool with multiple
- * protocol & anonymity tiers. We fetch from ALL tiers to maximize
- * our chances of finding proxies that TeraBox doesn't flag.
+ * ★★★ CRITICAL FINDING (tested 2026-08-13):
+ * Free datacenter proxies are ALL dead/blocked by TeraBox.
+ * CaptchaSolv returns ERROR_CAPTCHA_UNSOLVABLE for proxyless solving.
+ * → RESIDENTIAL PROXY IS REQUIRED for captcha solving to work!
+ * → Without it, TeraBox signup CANNOT succeed.
+ * ═══════════════════════════════════════════════════════════════════
  *
  * FETCH STRATEGY (multi-tier from ProxyScrape):
  * 1. ELITE HTTP    — highest anonymity, Western countries preferred
@@ -340,6 +347,48 @@ async function validateBatch(proxies: ProxyInfo[], concurrency = 10): Promise<Pr
   return valid;
 }
 
+// ─── Webshare.io Free Residential Proxies ───
+
+/**
+ * Get Webshare.io proxy configuration from env vars.
+ * Webshare offers 10 FREE residential proxies — perfect for TeraBox!
+ * Sign up at https://www.webshare.io/ (free tier = 10 proxies)
+ * Format: http://username:password@proxy.webshare.io:port
+ *
+ * Env vars:
+ *   WEBSHARE_PROXY — Full proxy URL (e.g. http://user:pass@proxy.webshare.io:80)
+ *   Or multiple proxies comma-separated: http://u:p@p1:80,http://u:p@p2:80
+ */
+function getWebshareProxies(): ProxyInfo[] {
+  const webshareProxy = process.env.WEBSHARE_PROXY;
+  if (!webshareProxy) return [];
+
+  const urls = webshareProxy.split(',').map(u => u.trim()).filter(u => u);
+  const proxies: ProxyInfo[] = [];
+
+  for (const proxyUrl of urls) {
+    try {
+      const parsed = new URL(proxyUrl);
+      proxies.push({
+        url: proxyUrl,
+        host: parsed.hostname,
+        port: parseInt(parsed.port, 10),
+        protocol: 'http',
+        country: 'unknown',
+        source: 'webshare-residential',
+        anonymity: 'elite', // Residential = highest anonymity
+        lastVerified: Date.now(),
+        failCount: 0,
+        successCount: 0,
+      });
+    } catch {
+      // Skip malformed URLs
+    }
+  }
+
+  return proxies;
+}
+
 // ─── IPRoyal Residential Proxies ───
 
 /**
@@ -411,7 +460,23 @@ export async function refreshProxyPool(): Promise<{
       console.log(`[Proxy] ${uploadedCount} uploaded proxies loaded (highest priority)`);
     }
 
-    // ★★★ Priority 1: IPRoyal residential proxies (BEST for TeraBox!)
+    // ★★★ Priority 1: Webshare.io residential proxies (FREE tier — 10 proxies!)
+    // Free residential IPs → TeraBox doesn't flag them → captcha solving works!
+    const webshareProxies = getWebshareProxies();
+    if (webshareProxies.length > 0) {
+      console.log(`[Proxy] Webshare: ${webshareProxies.length} residential proxy(ies) configured`);
+      const existingUrls = new Set(proxyPool.map(p => p.url));
+      const newWebshare = webshareProxies.filter(p => !existingUrls.has(p.url));
+      if (newWebshare.length > 0) {
+        proxyPool = [
+          ...proxyPool.filter(p => p.failCount < MAX_FAILS),
+          ...newWebshare,
+        ];
+        console.log(`[Proxy] Added ${newWebshare.length} Webshare residential proxies to pool`);
+      }
+    }
+
+    // ★★★ Priority 2: IPRoyal residential proxies (BEST for TeraBox!)
     // Residential IPs look like real users → TeraBox doesn't flag them
     // Combined with CaptchaSolv proxied tasks → token bound to residential IP → accepted!
     const iproyalProxies = getIPRoyalProxies();
@@ -427,8 +492,8 @@ export async function refreshProxyPool(): Promise<{
         ];
         console.log(`[Proxy] Added ${newIPRoyal.length} IPRoyal residential proxies to pool`);
       }
-    } else {
-      console.log('[Proxy] IPRoyal not configured — using ProxyScrape free proxies');
+    } else if (webshareProxies.length === 0) {
+      console.log('[Proxy] No residential proxies configured — using ProxyScrape free proxies (datacenter IPs, less reliable)');
     }
 
     // ★ Priority 2: ProxyScrape free proxies (fallback — datacenter IPs, less reliable)
@@ -502,7 +567,17 @@ export async function getNextProxy(): Promise<ProxyInfo | null> {
     return proxy;
   }
 
-  // ★ Priority 0: IPRoyal residential proxies (BEST — real IPs, never flagged)
+  // ★ Priority 0: Webshare.io residential proxies (FREE — 10 residential IPs)
+  const webshareProxies = proxyPool.filter(
+    p => p.source === 'webshare-residential' && p.failCount < MAX_FAILS
+  );
+  if (webshareProxies.length > 0) {
+    const proxy = webshareProxies[currentIndex % webshareProxies.length];
+    currentIndex++;
+    return proxy;
+  }
+
+  // ★ Priority 1: IPRoyal residential proxies (BEST — real IPs, never flagged)
   const iproyalProxies = proxyPool.filter(
     p => p.source === 'iproyal-residential' && p.failCount < MAX_FAILS
   );
