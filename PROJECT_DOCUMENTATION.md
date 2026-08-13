@@ -28,6 +28,8 @@
 20. [Scripts & Testing Utilities](#20-scripts--testing-utilities)
 21. [Key Findings From Testing](#21-key-findings-from-testing)
 22. [Configuration Quick Reference](#22-configuration-quick-reference)
+23. [Credentials & API Keys — Master Reference](#23-credentials--api-keys--master-reference)
+24. [Full .env File (Production-Ready)](#24-full-env-file-production-ready)
 
 ---
 
@@ -1272,6 +1274,174 @@ POST /createTask     → Create async task
 POST /getTaskResult  → Poll for solution
 POST /solve          → Sync solve (recommended)
 Free: 100 solves/day
+```
+
+---
+
+## 23. Credentials & API Keys — Master Reference
+
+> ⚠️ **SENSITIVE DATA** — This section contains all active credentials. Do NOT share publicly.
+
+### CaptchaSolv (CAPTCHA Solving)
+| Item | Value |
+|---|---|
+| **API Key** | `40fd4b6c-efd9-4a07-99df-53b0cb3888db` |
+| **Base URL** | `https://v1.captchasolv.com` |
+| **Free Tier** | 100 solves/day |
+| **How to get more** | Discord `/claim` or Telegram bot for daily free resets |
+| **Docs** | https://docs.captchasolv.com/getting-started/ |
+
+### Webshare.io (Residential Proxies)
+| Item | Value |
+|---|---|
+| **API Key** | `0yrk5hbrfrci570mpa5kawi3s5odm955vobzi824` |
+| **Proxy Username** | `zvuvwjcq` |
+| **Proxy Password** | `d0y8143zsfif` |
+| **Free Tier** | 10 residential proxies |
+| **Dashboard** | https://proxy.webshare.io/ |
+| **API Docs** | https://docs.webshare.io/ |
+
+**All 10 Proxy Endpoints:**
+```
+http://zvuvwjcq:d0y8143zsfif@31.59.20.176:6754/
+http://zvuvwjcq:d0y8143zsfif@31.56.127.193:7684/
+http://zvuvwjcq:d0y8143zsfif@45.38.107.97:6014/
+http://zvuvwjcq:d0y8143zsfif@198.105.121.200:6462/
+http://zvuvwjcq:d0y8143zsfif@64.137.96.74:6641/
+http://zvuvwjcq:d0y8143zsfif@198.23.243.226:6361/
+http://zvuvwjcq:d0y8143zsfif@38.154.185.97:6370/
+http://zvuvwjcq:d0y8143zsfif@84.247.60.125:6095/
+http://zvuvwjcq:d0y8143zsfif@142.111.67.146:5611/
+http://zvuvwjcq:d0y8143zsfif@191.96.254.138:6185/
+```
+
+**Full WEBSHARE_PROXY env var:**
+```
+WEBSHARE_PROXY=http://zvuvwjcq:d0y8143zsfif@31.59.20.176:6754/,http://zvuvwjcq:d0y8143zsfif@31.56.127.193:7684/,http://zvuvwjcq:d0y8143zsfif@45.38.107.97:6014/,http://zvuvwjcq:d0y8143zsfif@198.105.121.200:6462/,http://zvuvwjcq:d0y8143zsfif@64.137.96.74:6641/,http://zvuvwjcq:d0y8143zsfif@198.23.243.226:6361/,http://zvuvwjcq:d0y8143zsfif@38.154.185.97:6370/,http://zvuvwjcq:d0y8143zsfif@84.247.60.125:6095/,http://zvuvwjcq:d0y8143zsfif@142.111.67.146:5611/,http://zvuvwjcq:d0y8143zsfif@191.96.254.138:6185/
+```
+
+### GitHub Repository
+| Item | Value |
+|---|---|
+| **Owner** | `krishna98877` |
+| **Repo** | `Terabox` |
+| **Full URL** | https://github.com/krishna98877/Terabox |
+| **Clone URL** | `https://github.com/krishna98877/Terabox.git` |
+| **Default Branch** | `main` |
+
+### Render.com (Deployment)
+| Item | Value |
+|---|---|
+| **App URL** | https://terabox-detf.onrender.com |
+| **Dashboard** | https://dashboard.render.com/ |
+| **Plan** | Free (512MB RAM, 15-min sleep threshold) |
+| **Build Command** | `npm run build` |
+| **Start Command** | `npm start` |
+| **Framework** | Next.js |
+| **Region** | Oregon, USA |
+| **Keep-Alive** | Self-ping every 4 min to prevent sleeping |
+
+**Render Environment Variables (set in dashboard):**
+```
+DATABASE_URL=file:./db/production.db
+CAPTCHASOLV_API_KEY=40fd4b6c-efd9-4a07-99df-53b0cb3888db
+WEBSHARE_PROXY=http://zvuvwjcq:d0y8143zsfif@31.59.20.176:6754/,http://zvuvwjcq:d0y8143zsfif@31.56.127.193:7684/,http://zvuvwjcq:d0y8143zsfif@45.38.107.97:6014/,http://zvuvwjcq:d0y8143zsfif@198.105.121.200:6462/,http://zvuvwjcq:d0y8143zsfif@64.137.96.74:6641/,http://zvuvwjcq:d0y8143zsfif@198.23.243.226:6361/,http://zvuvwjcq:d0y8143zsfif@38.154.185.97:6370/,http://zvuvwjcq:d0y8143zsfif@84.247.60.125:6095/,http://zvuvwjcq:d0y8143zsfif@142.111.67.146:5611/,http://zvuvwjcq:d0y8143zsfif@191.96.254.138:6185/
+WEBSHARE_API_KEY=0yrk5hbrfrci570mpa5kawi3s5odm955vobzi824
+NODE_ENV=production
+```
+
+### Vercel (Not Currently Used)
+| Item | Value |
+|---|---|
+| **Status** | Not deployed — Render is primary |
+| **Reason** | Vercel free tier has 10s serverless function timeout (too short for captcha solving which takes 10-60s) |
+| **Alternative** | Use Vercel for static frontend + Render for backend if needed |
+
+### Supabase (Not Currently Used)
+| Item | Value |
+|---|---|
+| **Status** | Not used — SQLite via Prisma is current DB |
+| **Reason** | SQLite is sufficient for this use case (single-server, embedded DB) |
+| **If needed** | Replace `DATABASE_URL` with Supabase PostgreSQL connection string |
+| **Supabase URL** | (not set) |
+| **Supabase Anon Key** | (not set) |
+| **Supabase Service Key** | (not set) |
+
+### CatchMail.io (Temp Email)
+| Item | Value |
+|---|---|
+| **API Base** | `https://api.catchmail.io` |
+| **Cost** | Free |
+| **Auth Required** | No — just use any email @supported-domain |
+| **Domains** | mailistry.com, zeppost.com, mailsac.com, snapmail.cc, catchmail.io |
+
+### Groq AI (Optional — Not Currently Active)
+| Item | Value |
+|---|---|
+| **Status** | Not configured (GROQ_API_KEY not set) |
+| **API Base** | `https://api.groq.com/openai/v1/chat/completions` |
+| **Model** | `llama-3.3-70b-versatile` |
+| **Purpose** | Email analysis, error diagnosis, optimization suggestions |
+| **Get Key** | https://console.groq.com/ |
+
+### IPRoyal (Residential Proxies — Not Currently Active)
+| Item | Value |
+|---|---|
+| **Status** | Not configured (no free tier available) |
+| **Signup** | https://iproyal.com/residential-proxies/ |
+| **Free Trial** | 100MB traffic |
+| **Paid** | From $1.75/GB |
+| **Gateway** | `http://user:pass@gate.iproyal.com:12321` |
+
+### TeraBox (Target Platform)
+| Item | Value |
+|---|---|
+| **Primary Domain** | `https://www.1024terabox.com` |
+| **Fallback Domains** | `terabox.com`, `dubox.com` |
+| **Default Referral Link** | `https://1024terabox.com/s/1_9hqBxA_U6WRc9FUhHl1zQ` |
+| **reCAPTCHA Sitekey** | `6LceASUfAAAAAHBcvTdvuPVie_9yzavGubPLOGTH` |
+| **App ID** | `250528` |
+| **Chrome Version (spoofed)** | `131` |
+
+---
+
+## 24. Full .env File (Production-Ready)
+
+```env
+# ═══════════════════════════════════════════════════════════════════════
+# TeraBox Referral Agent — Environment Configuration
+# ═══════════════════════════════════════════════════════════════════════
+
+# Database (SQLite — zero config, embedded)
+DATABASE_URL=file:./db/production.db
+
+# CaptchaSolv API Key (CAPTCHA solver — 100 FREE solves/day)
+CAPTCHASOLV_API_KEY=40fd4b6c-efd9-4a07-99df-53b0cb3888db
+
+# Webshare.io Residential Proxies (10 free — REQUIRED for TeraBox!)
+WEBSHARE_PROXY=http://zvuvwjcq:d0y8143zsfif@31.59.20.176:6754/,http://zvuvwjcq:d0y8143zsfif@31.56.127.193:7684/,http://zvuvwjcq:d0y8143zsfif@45.38.107.97:6014/,http://zvuvwjcq:d0y8143zsfif@198.105.121.200:6462/,http://zvuvwjcq:d0y8143zsfif@64.137.96.74:6641/,http://zvuvwjcq:d0y8143zsfif@198.23.243.226:6361/,http://zvuvwjcq:d0y8143zsfif@38.154.185.97:6370/,http://zvuvwjcq:d0y8143zsfif@84.247.60.125:6095/,http://zvuvwjcq:d0y8143zsfif@142.111.67.146:5611/,http://zvuvwjcq:d0y8143zsfif@191.96.254.138:6185/
+
+# Webshare.io API Key (for fetching more proxy endpoints)
+WEBSHARE_API_KEY=0yrk5hbrfrci570mpa5kawi3s5odm955vobzi824
+
+# Groq AI (optional — for email analysis & error diagnosis)
+# GROQ_API_KEY=your-groq-key-here
+
+# TeraBox reCAPTCHA site key (hardcoded fallback exists — only set if TeraBox rotates key)
+# RECAPTCHA_SITE_KEY=6LceASUfAAAAAHBcvTdvuPVie_9yzavGubPLOGTH
+
+# CatchMail.io custom domain (optional)
+# CATCHMAIL_CUSTOM_DOMAIN=
+
+# IPRoyal Residential Proxies (alternative to Webshare — not free)
+# IPROYAL_USERNAME=
+# IPROYAL_PASSWORD+PASSWORD=
+# IPROYAL_HOST=gate.iproyal.com
+# IPROYAL_PORT=12321
+# IPROYAL_COUNTRY=us
+
+# Environment
+NODE_ENV=production
 ```
 
 ---
