@@ -383,3 +383,31 @@ Stage Summary:
 - RESIDENTIAL PROXY IS REQUIRED for the pipeline to work
 - Best free option: Webshare.io (10 free residential proxies)
 - Code changes: proxy manager updated with Webshare support
+
+---
+Task ID: 2
+Agent: main
+Task: Test Webshare residential proxy with TeraBox signup
+
+Work Log:
+- User provided Webshare.io API key and proxy credentials
+- Tested all 10 Webshare proxies — ALL working (verified via ipv4.webshare.io)
+- Countries: GB (3), US (4), ES (1), PL (1), JP (1)
+- TeraBox getpubkey via proxy: ✅ WORKS
+- TeraBox sendcode via proxy: Returns errno 400090 "need verify_v2" (needs captcha)
+- CaptchaSolv v2 Standard with GB proxy: SOLVED ONCE (token len 2276, 45s) but token REJECTED by TeraBox (errno 400090)
+- Subsequent attempts: ERROR_CAPTCHA_UNSOLVABLE (inconsistent)
+- CaptchaSolv v2 Enterprise with proxy: Timeout/UNSOLVABLE
+- CaptchaSolv rate limits hit (ERROR_LIMIT_EXCEEDED) — free tier concurrent limit
+- Saved all 10 proxies to .env (WEBSHARE_PROXY) and /upload/proxies.txt
+- Updated proxy manager with Webshare.io support
+
+Stage Summary:
+- Webshare proxies: ✅ ALL 10 WORKING
+- TeraBox API via proxy: ✅ WORKS
+- CaptchaSolv solving: ⚠️ INTERMITTENT — solved once but inconsistent
+- Token acceptance: ❌ v2 Standard token was rejected (errno 400090)
+- Key issue: CaptchaSolv struggles with TeraBox's enterprise-grade reCAPTCHA
+- The captcha was solved ONCE (len 2276) but TeraBox rejected the token
+- Possible fix: Need to try RecaptchaV2EnterpriseTask token (different type)
+- OR: The v2 Standard token may have been expired by the time sendcode was called
