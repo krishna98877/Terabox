@@ -1,0 +1,11 @@
+═══════════════════════════════════════════════════════
+  TeraBox Signup Pipeline — E2E Test
+═══════════════════════════════════════════════════════
+Email: e2etest1786624834@gmail.com
+Proxy: http:****@31.59.20.176:6754
+═══════════════════════════════════════════════════════
+
+[PROXY] Testing...
+Error: ERROR_INVALID_REQUEST — Invalid request format
+Error: ERROR_INVALID_REQUEST — Invalid request format
+❌ Captcha solving FAILED

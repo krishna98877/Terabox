@@ -1,0 +1,33 @@
+=== Step 1: Proxy Test ===
+IP: 31.59.20.176
+=== Step 2: Get Pubkey ===
+Pubkey response: {"code":0,"data":{"pp1":"gcwooxwo1421cj99z0_Nnp6y7lH-ZE7REOtcPIGyAzh21qaXnlTUukMMUmHk7BDDpXAQH1cuOsZC7MCZO-DT14u4ODjCDmnc8nhYlGjDLEcd8gwCRku_Fktti5AHPmvBwJgMU43SYnZ6PrhZQ5OI91WLZOj_YMqUc1iDwdRoCkp16kO
+=== Step 3: Create Captcha Task ===
+Create response: {"errorId":0,"taskId":"22cb77ff-0fd5-47ac-8959-7ec853401ef7"}
+Task ID: 22cb77ff-0fd5-47ac-8959-7ec853401ef7
+=== Step 4: Poll for Captcha Result ===
+Poll 1: error=ERROR_INVALID_REQUEST
+Poll 2: error=ERROR_INVALID_REQUEST
+Poll 3: error=ERROR_INVALID_REQUEST
+Poll 4: error=ERROR_INVALID_REQUEST
+Poll 5: error=ERROR_INVALID_REQUEST
+Poll 6: error=ERROR_INVALID_REQUEST
+Poll 7: error=ERROR_INVALID_REQUEST
+Poll 8: error=ERROR_INVALID_REQUEST
+Poll 9: error=ERROR_INVALID_REQUEST
+Poll 10: error=ERROR_INVALID_REQUEST
+Poll 11: error=ERROR_INVALID_REQUEST
+Poll 12: error=ERROR_INVALID_REQUEST
+Poll 13: error=ERROR_INVALID_REQUEST
+Poll 14: error=ERROR_INVALID_REQUEST
+Poll 15: error=ERROR_INVALID_REQUEST
+Poll 16: error=ERROR_INVALID_REQUEST
+Poll 17: error=ERROR_INVALID_REQUEST
+Poll 18: error=ERROR_INVALID_REQUEST
+Poll 19: error=ERROR_INVALID_REQUEST
+Poll 20: error=ERROR_INVALID_REQUEST
+Poll 21: error=ERROR_INVALID_REQUEST
+Poll 22: error=ERROR_INVALID_REQUEST
+Poll 23: error=ERROR_INVALID_REQUEST
+Poll 24: error=ERROR_INVALID_REQUEST
+FAILED: No captcha token

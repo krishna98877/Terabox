@@ -1,0 +1,9 @@
+============================================================
+  TeraBox Signup Pipeline — Complete E2E Test (FINAL)
+============================================================
+Email: e2etest1786626251342@gmail.com
+
+[1] Getting session cookies...
+  Session cookies obtained
+
+[2] Getting pubkey...
